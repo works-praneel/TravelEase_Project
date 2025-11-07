@@ -1,8 +1,8 @@
 pipeline {
     agent any
 
-    // Poll GitHub every 2 minutes
     triggers {
+        // Poll GitHub every 2 minutes
         pollSCM('H/2 * * * *')
     }
 
@@ -47,45 +47,53 @@ pipeline {
             }
         }
 
-        // ------------------- TERRAFORM -------------------
+        // ------------------- TERRAFORM (RELIABLE VERSION) -------------------
         stage('Apply Infrastructure (Terraform)') {
             steps {
                 script {
                     dir('D:/Minor/TravelEase/terraform') {
                         echo 'Running Terraform init, plan, and apply...'
+
+                        // Single unified Terraform session with persistent context
                         bat '''
                         terraform init -no-color
                         terraform plan -no-color -out=tfplan
                         terraform apply -no-color -auto-approve tfplan
+
+                        echo Capturing outputs...
+                        terraform output -json > tf_outputs.json
                         '''
 
-                        // Capture Terraform outputs safely
-                        def rawAlbDns      = bat(returnStdout: true, script: 'terraform output -raw load_balancer_dns 2>NUL').trim()
-                        def rawS3Bucket    = bat(returnStdout: true, script: 'terraform output -raw frontend_bucket_name 2>NUL').trim()
-                        def rawFrontendUrl = bat(returnStdout: true, script: 'terraform output -raw frontend_website_url 2>NUL').trim()
+                        // Parse JSON safely (no nulls)
+                        def jsonText = readFile('D:/Minor/TravelEase/terraform/tf_outputs.json')
+                        def tf = new groovy.json.JsonSlurper().parseText(jsonText)
 
-                        env.ALB_DNS        = rawAlbDns      ? rawAlbDns.replaceAll('"', '')      : ''
-                        env.S3_BUCKET_NAME = rawS3Bucket    ? rawS3Bucket.replaceAll('"', '')    : ''
-                        env.FRONTEND_URL   = rawFrontendUrl ? rawFrontendUrl.replaceAll('"', '') : ''
+                        // Assign outputs
+                        env.ALB_DNS        = tf.load_balancer_dns?.value ?: ''
+                        env.S3_BUCKET_NAME = tf.frontend_bucket_name?.value ?: ''
+                        env.FRONTEND_URL   = tf.frontend_website_url?.value ?: ''
 
                         if (!env.ALB_DNS || !env.S3_BUCKET_NAME || !env.FRONTEND_URL) {
                             error("""
-                            ❌ Terraform output capture failed.
-                            ALB_DNS        = '${env.ALB_DNS}'
-                            S3_BUCKET_NAME = '${env.S3_BUCKET_NAME}'
-                            FRONTEND_URL   = '${env.FRONTEND_URL}'
+                            ❌ Terraform outputs missing or invalid.
+                            Captured:
+                              ALB_DNS        = ${env.ALB_DNS}
+                              S3_BUCKET_NAME = ${env.S3_BUCKET_NAME}
+                              FRONTEND_URL   = ${env.FRONTEND_URL}
                             Check:
-                              1. Jenkins AWS credentials are valid.
-                              2. 'terraform output' returns valid results.
-                              3. Correct directory path: D:/Minor/TravelEase/terraform
+                              • Terraform outputs defined exactly as:
+                                  output "load_balancer_dns"
+                                  output "frontend_bucket_name"
+                                  output "frontend_website_url"
+                              • terraform.tfstate is correct and applied.
                             """.stripIndent())
                         }
 
                         env.NEW_ALB_URL = "http://${env.ALB_DNS}"
 
-                        echo "✅ Captured ALB DNS       : ${env.ALB_DNS}"
-                        echo "✅ Captured S3 Bucket     : ${env.S3_BUCKET_NAME}"
-                        echo "✅ Captured Frontend URL  : ${env.FRONTEND_URL}"
+                        echo "✅ ALB DNS        : ${env.ALB_DNS}"
+                        echo "✅ S3 Bucket Name : ${env.S3_BUCKET_NAME}"
+                        echo "✅ Frontend URL   : ${env.FRONTEND_URL}"
                     }
                 }
             }
@@ -131,20 +139,20 @@ pipeline {
             }
         }
 
-        // ------------------- DEPLOY TO FARGATE -------------------
+        // ------------------- ECS DEPLOYMENT -------------------
         stage('Deploy to Fargate') {
             steps {
                 script {
                     def services = ['flight-service', 'booking-service', 'payment-service', 'crowdpulse-service']
                     services.each { svc ->
-                        echo "Forcing new deployment of ${svc}..."
+                        echo "Deploying service: ${svc}..."
                         bat "aws ecs update-service --cluster %CLUSTER_NAME% --service ${svc} --force-new-deployment"
                     }
                 }
             }
         }
 
-        // ------------------- DEPLOY FRONTEND -------------------
+        // ------------------- FRONTEND DEPLOYMENT -------------------
         stage('Deploy Frontend (S3)') {
             steps {
                 script {
@@ -154,7 +162,7 @@ pipeline {
                     }
 
                     bat """
-                    echo Deploying frontend assets to s3://%S3_BUCKET_NAME% ...
+                    echo Uploading frontend to s3://%S3_BUCKET_NAME% ...
                     aws s3 cp index.html s3://%S3_BUCKET_NAME%/index.html --content-type text/html --acl public-read
                     aws s3 cp CrowdPulse\\frontend\\crowdpulse_widget.html s3://%S3_BUCKET_NAME%/crowdpulse_widget.html --content-type text/html --acl public-read
                     aws s3 cp images\\travelease_logo.png s3://%S3_BUCKET_NAME%/images/travelease_logo.png --content-type image/png --acl public-read
