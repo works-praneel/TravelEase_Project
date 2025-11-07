@@ -3,4 +3,4 @@ WORKDIR /app
 COPY . .
 RUN pip install -r requirements.txt
 EXPOSE 5003
-CMD ["python", "Payment_Service_App.py"]
+CMD ["gunicorn", "-b", "0.0.0.0:5003", "Payment_Service_App:app"]

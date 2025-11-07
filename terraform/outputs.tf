@@ -8,3 +8,7 @@ output "frontend_bucket_name" {
   value       = aws_s3_bucket.frontend_bucket.bucket
 }
 
+output "frontend_website_url" {
+  description = "URL for the S3 static website"
+  value       = aws_s3_bucket_website_configuration.frontend_site.website_endpoint
+}

@@ -2,4 +2,6 @@ _pycache_/
 *.pyc
 .env
 *.log
-*.DS_Store
+*.DS_Storeterraform/.terraform/
+*.exe
+*.zip
