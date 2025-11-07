@@ -20,6 +20,7 @@ pipeline {
 
     stages {
 
+        // ------------------- CHECKOUT -------------------
         stage('Checkout') {
             steps {
                 echo 'Cloning repository...'
@@ -27,6 +28,7 @@ pipeline {
             }
         }
 
+        // ------------------- AWS LOGIN -------------------
         stage('Login to AWS & ECR') {
             steps {
                 withCredentials([usernamePassword(
@@ -45,23 +47,32 @@ pipeline {
             }
         }
 
-        // --- Terraform Infrastructure ---
+        // ------------------- TERRAFORM -------------------
         stage('Apply Infrastructure (Terraform)') {
             steps {
                 script {
                     dir('D:/Minor/TravelEase/terraform') {
                         echo 'Running Terraform init, plan, and apply...'
                         bat '''
-                        terraform init
-                        terraform plan -out=tfplan
-                        terraform apply -auto-approve tfplan
+                        terraform init -no-color
+                        terraform plan -no-color -out=tfplan
+                        terraform apply -no-color -auto-approve tfplan
                         '''
 
-                        // Capture Terraform outputs dynamically
-                        env.ALB_DNS        = bat(returnStdout: true, script: 'terraform output -raw load_balancer_dns').trim()
-                        env.S3_BUCKET_NAME = bat(returnStdout: true, script: 'terraform output -raw frontend_bucket_name').trim()
-                        env.FRONTEND_URL   = bat(returnStdout: true, script: 'terraform output -raw frontend_website_url').trim()
-                        env.NEW_ALB_URL    = "http://${env.ALB_DNS}"
+                        // Capture Terraform outputs safely
+                        env.ALB_DNS        = bat(returnStdout: true, script: 'terraform output -raw load_balancer_dns 2>NUL').trim()
+                        env.S3_BUCKET_NAME = bat(returnStdout: true, script: 'terraform output -raw frontend_bucket_name 2>NUL').trim()
+                        env.FRONTEND_URL   = bat(returnStdout: true, script: 'terraform output -raw frontend_website_url 2>NUL').trim()
+
+                        env.ALB_DNS        = env.ALB_DNS.replaceAll('"', '')
+                        env.S3_BUCKET_NAME = env.S3_BUCKET_NAME.replaceAll('"', '')
+                        env.FRONTEND_URL   = env.FRONTEND_URL.replaceAll('"', '')
+
+                        if (!env.S3_BUCKET_NAME?.trim()) {
+                            error("Terraform outputs are empty! Check variable names in your .tf outputs.")
+                        }
+
+                        env.NEW_ALB_URL = "http://${env.ALB_DNS}"
 
                         echo "✅ Captured ALB DNS       : ${env.ALB_DNS}"
                         echo "✅ Captured S3 Bucket     : ${env.S3_BUCKET_NAME}"
@@ -71,7 +82,7 @@ pipeline {
             }
         }
 
-        // --- Update Frontend ALB URL ---
+        // ------------------- FRONTEND UPDATE -------------------
         stage('Update Frontend ALB URL') {
             steps {
                 script {
@@ -86,7 +97,7 @@ pipeline {
             }
         }
 
-        // --- Build, Tag, and Push Docker Images ---
+        // ------------------- DOCKER BUILD & PUSH -------------------
         stage('Build, Tag, and Push Images') {
             steps {
                 script {
@@ -94,8 +105,10 @@ pipeline {
                         'flight-service'     : 'Flight_Service',
                         'booking-service'    : 'Booking_Service',
                         'payment-service'    : 'Payment_Service',
+                        // fixed path + correct port in Dockerfile
                         'crowdpulse-service' : 'CrowdPulse\\backend'
                     ]
+
                     dir("${REPO_DIR}") {
                         services.each { name, path ->
                             echo "Building and pushing image for ${name}"
@@ -110,7 +123,7 @@ pipeline {
             }
         }
 
-        // --- Deploy Backend to ECS Fargate ---
+        // ------------------- DEPLOY TO FARGATE -------------------
         stage('Deploy to Fargate') {
             steps {
                 script {
@@ -123,7 +136,7 @@ pipeline {
             }
         }
 
-        // --- Deploy Frontend to S3 ---
+        // ------------------- DEPLOY FRONTEND -------------------
         stage('Deploy Frontend (S3)') {
             steps {
                 script {
@@ -142,7 +155,7 @@ pipeline {
             }
         }
 
-        // --- Final Outputs ---
+        // ------------------- DISPLAY OUTPUTS -------------------
         stage('Display Outputs') {
             steps {
                 script {
