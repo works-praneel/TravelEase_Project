@@ -15,7 +15,6 @@ pipeline {
         S3_BUCKET_NAME = ''
         FRONTEND_URL   = ''
         NEW_ALB_URL    = ''
-
         REPO_DIR       = '.'
     }
 
@@ -50,7 +49,6 @@ pipeline {
         stage('Apply Infrastructure (Terraform)') {
             steps {
                 script {
-                    // Local Terraform folder
                     dir('D:/Minor/TravelEase/terraform') {
                         echo 'Running Terraform init, plan, and apply...'
                         bat '''
@@ -59,31 +57,21 @@ pipeline {
                         terraform apply -auto-approve tfplan
                         '''
 
-                        // Capture Terraform outputs
-                        def alb    = bat(returnStdout: true, script: 'terraform output -raw load_balancer_dns').trim()
-                        def bucket = bat(returnStdout: true, script: 'terraform output -raw frontend_bucket_name').trim()
-                        def url    = bat(returnStdout: true, script: 'terraform output -raw frontend_website_url').trim()
+                        // Capture Terraform outputs dynamically
+                        env.ALB_DNS        = bat(returnStdout: true, script: 'terraform output -raw load_balancer_dns').trim()
+                        env.S3_BUCKET_NAME = bat(returnStdout: true, script: 'terraform output -raw frontend_bucket_name').trim()
+                        env.FRONTEND_URL   = bat(returnStdout: true, script: 'terraform output -raw frontend_website_url').trim()
+                        env.NEW_ALB_URL    = "http://${env.ALB_DNS}"
 
-                        echo "✅ Captured ALB DNS       : ${alb}"
-                        echo "✅ Captured S3 Bucket     : ${bucket}"
-                        echo "✅ Captured Frontend URL  : ${url}"
-
-                        // Persist globally with proper quoting
-                        bat "setx ALB_DNS \"${alb}\""
-                        bat "setx S3_BUCKET_NAME \"${bucket}\""
-                        bat "setx FRONTEND_URL \"${url}\""
-
-                        // Also update current environment for this run
-                        env.ALB_DNS        = alb
-                        env.S3_BUCKET_NAME = bucket
-                        env.FRONTEND_URL   = url
-                        env.NEW_ALB_URL    = "http://${alb}"
+                        echo "✅ Captured ALB DNS       : ${env.ALB_DNS}"
+                        echo "✅ Captured S3 Bucket     : ${env.S3_BUCKET_NAME}"
+                        echo "✅ Captured Frontend URL  : ${env.FRONTEND_URL}"
                     }
                 }
             }
         }
 
-        // --- Update Frontend with new ALB URL ---
+        // --- Update Frontend ALB URL ---
         stage('Update Frontend ALB URL') {
             steps {
                 script {
@@ -106,7 +94,7 @@ pipeline {
                         'flight-service'     : 'Flight_Service',
                         'booking-service'    : 'Booking_Service',
                         'payment-service'    : 'Payment_Service',
-                        'crowdpulse-service' : 'CrowdPulse\\backend' // fixed path
+                        'crowdpulse-service' : 'CrowdPulse\\backend'
                     ]
                     dir("${REPO_DIR}") {
                         services.each { name, path ->
@@ -154,7 +142,7 @@ pipeline {
             }
         }
 
-        // --- Display Outputs ---
+        // --- Final Outputs ---
         stage('Display Outputs') {
             steps {
                 script {
