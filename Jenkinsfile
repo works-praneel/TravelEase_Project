@@ -1,19 +1,20 @@
 pipeline {
     agent any
 
+    triggers {
+        // Poll GitHub every 2 minutes (H/2 spreads start times)
+        pollSCM('H/2 * * * *')
+    }
+
     environment {
-        // AWS configuration
         AWS_REGION     = 'eu-north-1'
         ECR_REGISTRY   = '904233121598.dkr.ecr.eu-north-1.amazonaws.com'
         CLUSTER_NAME   = 'TravelEaseCluster'
 
-        // Terraform outputs (populated dynamically)
         ALB_DNS        = ''
         S3_BUCKET_NAME = ''
         FRONTEND_URL   = ''
         NEW_ALB_URL    = ''
-
-        // Workspace base directory
         REPO_DIR       = '.'
     }
 
@@ -44,11 +45,10 @@ pipeline {
             }
         }
 
-        // --- Terraform Infrastructure Stage ---
+        // --- Terraform Infrastructure ---
         stage('Apply Infrastructure (Terraform)') {
             steps {
                 script {
-                    // Use absolute Terraform directory
                     dir('D:/Minor/TravelEase/terraform') {
                         echo 'Running Terraform init, plan, and apply...'
                         bat '''
@@ -57,25 +57,32 @@ pipeline {
                         terraform apply -auto-approve tfplan
                         '''
 
-                        // Capture outputs directly from Terraform
+                        // Capture Terraform outputs
                         def alb    = bat(returnStdout: true, script: 'terraform output -raw load_balancer_dns').trim()
                         def bucket = bat(returnStdout: true, script: 'terraform output -raw frontend_bucket_name').trim()
                         def url    = bat(returnStdout: true, script: 'terraform output -raw frontend_website_url').trim()
 
+                        // Display captured values
+                        echo "✅ Captured ALB DNS       : ${alb}"
+                        echo "✅ Captured S3 Bucket     : ${bucket}"
+                        echo "✅ Captured Frontend URL  : ${url}"
+
+                        // Persist to Windows environment so later stages can read them
+                        bat "setx ALB_DNS ${alb}"
+                        bat "setx S3_BUCKET_NAME ${bucket}"
+                        bat "setx FRONTEND_URL ${url}"
+
+                        // Update current pipeline env for this run
                         env.ALB_DNS        = alb
                         env.S3_BUCKET_NAME = bucket
-                        env.NEW_ALB_URL    = "http://${alb}"
                         env.FRONTEND_URL   = url
-
-                        echo "✅ Captured ALB DNS       : ${env.ALB_DNS}"
-                        echo "✅ Captured S3 Bucket     : ${env.S3_BUCKET_NAME}"
-                        echo "✅ Captured Frontend URL  : ${env.FRONTEND_URL}"
+                        env.NEW_ALB_URL    = "http://${alb}"
                     }
                 }
             }
         }
 
-        // --- Update Frontend HTML with ALB URL ---
+        // --- Update Frontend ALB URL ---
         stage('Update Frontend ALB URL') {
             steps {
                 script {
@@ -90,7 +97,7 @@ pipeline {
             }
         }
 
-        // --- Docker Build, Tag, and Push ---
+        // --- Build, Tag, and Push Docker Images ---
         stage('Build, Tag, and Push Images') {
             steps {
                 script {
@@ -114,7 +121,7 @@ pipeline {
             }
         }
 
-        // --- Deploy Backend to ECS Fargate ---
+        // --- Deploy Backend to ECS ---
         stage('Deploy to Fargate') {
             steps {
                 script {
@@ -130,16 +137,23 @@ pipeline {
         // --- Deploy Frontend to S3 ---
         stage('Deploy Frontend (S3)') {
             steps {
-                bat """
-                echo Deploying frontend assets to s3://%S3_BUCKET_NAME% ...
-                aws s3 cp index.html s3://%S3_BUCKET_NAME%/index.html --content-type text/html --acl public-read
-                aws s3 cp CrowdPulse\\frontend\\crowdpulse_widget.html s3://%S3_BUCKET_NAME%/crowdpulse_widget.html --content-type text/html --acl public-read
-                aws s3 cp images\\travelease_logo.png s3://%S3_BUCKET_NAME%/images/travelease_logo.png --content-type image/png --acl public-read
-                """
+                script {
+                    echo "Using S3 bucket: ${env.S3_BUCKET_NAME}"
+                    if (!env.S3_BUCKET_NAME?.trim()) {
+                        error("S3_BUCKET_NAME is empty! Terraform output may not have been captured.")
+                    }
+
+                    bat """
+                    echo Deploying frontend assets to s3://%S3_BUCKET_NAME% ...
+                    aws s3 cp index.html s3://%S3_BUCKET_NAME%/index.html --content-type text/html --acl public-read
+                    aws s3 cp CrowdPulse\\frontend\\crowdpulse_widget.html s3://%S3_BUCKET_NAME%/crowdpulse_widget.html --content-type text/html --acl public-read
+                    aws s3 cp images\\travelease_logo.png s3://%S3_BUCKET_NAME%/images/travelease_logo.png --content-type image/png --acl public-read
+                    """
+                }
             }
         }
 
-        // --- Display Outputs at End ---
+        // --- Final Output Summary ---
         stage('Display Outputs') {
             steps {
                 script {
