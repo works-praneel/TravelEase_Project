@@ -7,12 +7,13 @@ pipeline {
         ECR_REGISTRY   = '904233121598.dkr.ecr.eu-north-1.amazonaws.com'
         CLUSTER_NAME   = 'TravelEaseCluster'
 
-        // Terraform outputs (set dynamically)
+        // Terraform outputs (populated dynamically)
         ALB_DNS        = ''
         S3_BUCKET_NAME = ''
+        FRONTEND_URL   = ''
         NEW_ALB_URL    = ''
 
-        // Repo workspace root
+        // Workspace base directory
         REPO_DIR       = '.'
     }
 
@@ -47,7 +48,7 @@ pipeline {
         stage('Apply Infrastructure (Terraform)') {
             steps {
                 script {
-                    // Use absolute local Terraform directory
+                    // Use absolute Terraform directory
                     dir('D:/Minor/TravelEase/terraform') {
                         echo 'Running Terraform init, plan, and apply...'
                         bat '''
@@ -55,18 +56,26 @@ pipeline {
                         terraform plan -out=tfplan
                         terraform apply -auto-approve tfplan
                         '''
-                        env.ALB_DNS        = bat(returnStdout: true, script: 'terraform output -raw load_balancer_dns').trim()
-                        env.S3_BUCKET_NAME = bat(returnStdout: true, script: 'terraform output -raw frontend_bucket_name').trim()
-                        env.NEW_ALB_URL    = "http://${env.ALB_DNS}"
 
-                        echo "Captured ALB DNS: ${env.ALB_DNS}"
-                        echo "Captured S3 Bucket: ${env.S3_BUCKET_NAME}"
+                        // Capture outputs directly from Terraform
+                        def alb    = bat(returnStdout: true, script: 'terraform output -raw load_balancer_dns').trim()
+                        def bucket = bat(returnStdout: true, script: 'terraform output -raw frontend_bucket_name').trim()
+                        def url    = bat(returnStdout: true, script: 'terraform output -raw frontend_website_url').trim()
+
+                        env.ALB_DNS        = alb
+                        env.S3_BUCKET_NAME = bucket
+                        env.NEW_ALB_URL    = "http://${alb}"
+                        env.FRONTEND_URL   = url
+
+                        echo "✅ Captured ALB DNS       : ${env.ALB_DNS}"
+                        echo "✅ Captured S3 Bucket     : ${env.S3_BUCKET_NAME}"
+                        echo "✅ Captured Frontend URL  : ${env.FRONTEND_URL}"
                     }
                 }
             }
         }
 
-        // --- Update Frontend with ALB URL ---
+        // --- Update Frontend HTML with ALB URL ---
         stage('Update Frontend ALB URL') {
             steps {
                 script {
@@ -81,7 +90,7 @@ pipeline {
             }
         }
 
-        // --- Docker Build, Tag, Push ---
+        // --- Docker Build, Tag, and Push ---
         stage('Build, Tag, and Push Images') {
             steps {
                 script {
@@ -130,16 +139,15 @@ pipeline {
             }
         }
 
-        // --- Display Outputs ---
+        // --- Display Outputs at End ---
         stage('Display Outputs') {
             steps {
                 script {
-                    def siteUrl = bat(returnStdout: true, script: 'cd D:/Minor/TravelEase/terraform && terraform output -raw frontend_website_url').trim()
                     echo '--------------------------------------------'
                     echo '✅ TravelEase Deployment Complete'
                     echo "Backend ALB DNS       : ${env.ALB_DNS}"
                     echo "Frontend S3 Bucket    : ${env.S3_BUCKET_NAME}"
-                    echo "Frontend Website URL  : ${siteUrl}"
+                    echo "Frontend Website URL  : ${env.FRONTEND_URL}"
                     echo "Frontend uses backend : ${env.NEW_ALB_URL}"
                     echo '--------------------------------------------'
                 }
