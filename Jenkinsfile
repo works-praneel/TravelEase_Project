@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     triggers {
-        // Poll GitHub every 2 minutes (H/2 spreads start times)
+        // Poll GitHub every 2 minutes
         pollSCM('H/2 * * * *')
     }
 
@@ -15,6 +15,7 @@ pipeline {
         S3_BUCKET_NAME = ''
         FRONTEND_URL   = ''
         NEW_ALB_URL    = ''
+
         REPO_DIR       = '.'
     }
 
@@ -49,6 +50,7 @@ pipeline {
         stage('Apply Infrastructure (Terraform)') {
             steps {
                 script {
+                    // Local Terraform folder
                     dir('D:/Minor/TravelEase/terraform') {
                         echo 'Running Terraform init, plan, and apply...'
                         bat '''
@@ -62,17 +64,16 @@ pipeline {
                         def bucket = bat(returnStdout: true, script: 'terraform output -raw frontend_bucket_name').trim()
                         def url    = bat(returnStdout: true, script: 'terraform output -raw frontend_website_url').trim()
 
-                        // Display captured values
                         echo "✅ Captured ALB DNS       : ${alb}"
                         echo "✅ Captured S3 Bucket     : ${bucket}"
                         echo "✅ Captured Frontend URL  : ${url}"
 
-                        // Persist to Windows environment so later stages can read them
-                        bat "setx ALB_DNS ${alb}"
-                        bat "setx S3_BUCKET_NAME ${bucket}"
-                        bat "setx FRONTEND_URL ${url}"
+                        // Persist globally with proper quoting
+                        bat "setx ALB_DNS \"${alb}\""
+                        bat "setx S3_BUCKET_NAME \"${bucket}\""
+                        bat "setx FRONTEND_URL \"${url}\""
 
-                        // Update current pipeline env for this run
+                        // Also update current environment for this run
                         env.ALB_DNS        = alb
                         env.S3_BUCKET_NAME = bucket
                         env.FRONTEND_URL   = url
@@ -82,7 +83,7 @@ pipeline {
             }
         }
 
-        // --- Update Frontend ALB URL ---
+        // --- Update Frontend with new ALB URL ---
         stage('Update Frontend ALB URL') {
             steps {
                 script {
@@ -102,10 +103,10 @@ pipeline {
             steps {
                 script {
                     def services = [
-                        'flight-service'    : 'Flight_Service',
-                        'booking-service'   : 'Booking_Service',
-                        'payment-service'   : 'Payment_Service',
-                        'crowdpulse-service': 'CrowdPulse\\backend'
+                        'flight-service'     : 'Flight_Service',
+                        'booking-service'    : 'Booking_Service',
+                        'payment-service'    : 'Payment_Service',
+                        'crowdpulse-service' : 'CrowdPulse\\backend' // fixed path
                     ]
                     dir("${REPO_DIR}") {
                         services.each { name, path ->
@@ -121,7 +122,7 @@ pipeline {
             }
         }
 
-        // --- Deploy Backend to ECS ---
+        // --- Deploy Backend to ECS Fargate ---
         stage('Deploy to Fargate') {
             steps {
                 script {
@@ -140,7 +141,7 @@ pipeline {
                 script {
                     echo "Using S3 bucket: ${env.S3_BUCKET_NAME}"
                     if (!env.S3_BUCKET_NAME?.trim()) {
-                        error("S3_BUCKET_NAME is empty! Terraform output may not have been captured.")
+                        error("S3_BUCKET_NAME is empty! Terraform output not captured.")
                     }
 
                     bat """
@@ -153,7 +154,7 @@ pipeline {
             }
         }
 
-        // --- Final Output Summary ---
+        // --- Display Outputs ---
         stage('Display Outputs') {
             steps {
                 script {
