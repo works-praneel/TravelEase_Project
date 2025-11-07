@@ -294,11 +294,8 @@
         // --- API URL FUNCTION ---
         // !! IMPORTANT !! AWS par deploy karte waqt is function ko badlein
         function getApiUrl(path, port) { 
-            // Localhost ke liye (Abhi ke liye ise comment out karein)
-            // return `http://127.0.0.1:${port}${path}`; 
-            
-            // AWS ke liye (Neeche waali line ko uncomment karein aur APNA ALB URL daalein)
-            const ALB_URL = "http://travelease-ALB-825161025.eu-north-1.elb.amazonaws.com";            return `${ALB_URL}${path}`;
+
+            const ALB_URL = "http://travelease-ALB-1464992295.eu-north-1.elb.amazonaws.com";            return `${ALB_URL}${path}`;
         }
 
         function showPage(pageId) { 
