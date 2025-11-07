@@ -1,8 +1,8 @@
 pipeline {
     agent any
 
+    // Poll GitHub every 2 minutes
     triggers {
-        // Poll GitHub every 2 minutes
         pollSCM('H/2 * * * *')
     }
 
@@ -60,16 +60,25 @@ pipeline {
                         '''
 
                         // Capture Terraform outputs safely
-                        env.ALB_DNS        = bat(returnStdout: true, script: 'terraform output -raw load_balancer_dns 2>NUL').trim()
-                        env.S3_BUCKET_NAME = bat(returnStdout: true, script: 'terraform output -raw frontend_bucket_name 2>NUL').trim()
-                        env.FRONTEND_URL   = bat(returnStdout: true, script: 'terraform output -raw frontend_website_url 2>NUL').trim()
+                        def rawAlbDns      = bat(returnStdout: true, script: 'terraform output -raw load_balancer_dns 2>NUL').trim()
+                        def rawS3Bucket    = bat(returnStdout: true, script: 'terraform output -raw frontend_bucket_name 2>NUL').trim()
+                        def rawFrontendUrl = bat(returnStdout: true, script: 'terraform output -raw frontend_website_url 2>NUL').trim()
 
-                        env.ALB_DNS        = env.ALB_DNS.replaceAll('"', '')
-                        env.S3_BUCKET_NAME = env.S3_BUCKET_NAME.replaceAll('"', '')
-                        env.FRONTEND_URL   = env.FRONTEND_URL.replaceAll('"', '')
+                        env.ALB_DNS        = rawAlbDns      ? rawAlbDns.replaceAll('"', '')      : ''
+                        env.S3_BUCKET_NAME = rawS3Bucket    ? rawS3Bucket.replaceAll('"', '')    : ''
+                        env.FRONTEND_URL   = rawFrontendUrl ? rawFrontendUrl.replaceAll('"', '') : ''
 
-                        if (!env.S3_BUCKET_NAME?.trim()) {
-                            error("Terraform outputs are empty! Check variable names in your .tf outputs.")
+                        if (!env.ALB_DNS || !env.S3_BUCKET_NAME || !env.FRONTEND_URL) {
+                            error("""
+                            ❌ Terraform output capture failed.
+                            ALB_DNS        = '${env.ALB_DNS}'
+                            S3_BUCKET_NAME = '${env.S3_BUCKET_NAME}'
+                            FRONTEND_URL   = '${env.FRONTEND_URL}'
+                            Check:
+                              1. Jenkins AWS credentials are valid.
+                              2. 'terraform output' returns valid results.
+                              3. Correct directory path: D:/Minor/TravelEase/terraform
+                            """.stripIndent())
                         }
 
                         env.NEW_ALB_URL = "http://${env.ALB_DNS}"
@@ -105,7 +114,6 @@ pipeline {
                         'flight-service'     : 'Flight_Service',
                         'booking-service'    : 'Booking_Service',
                         'payment-service'    : 'Payment_Service',
-                        // fixed path + correct port in Dockerfile
                         'crowdpulse-service' : 'CrowdPulse\\backend'
                     ]
 
