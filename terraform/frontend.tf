@@ -50,13 +50,19 @@ resource "aws_s3_bucket_policy" "allow_public_access" {
   })
 }
 
+# --- UPDATED: To upload all front-end assets including the CrowdPulse widget ---
 resource "aws_s3_object" "frontend_files" {
-  # Yeh file ko project ki root directory se uthayega
-  for_each = fileset("${path.module}/..", "index.html")
+  for_each = fileset("${path.module}/..", ["index.html", "CrowdPulse/frontend/*", "images/*"])
 
   bucket       = aws_s3_bucket.frontend_bucket.id
   key          = each.value
   source       = "${path.module}/../${each.value}"
   etag         = filemd5("${path.module}/../${each.value}")
-  content_type = "text/html"
+  
+  # Dynamic Content Type determination
+  content_type = can(regex("\\.html$", each.key)) ? "text/html" : (
+    can(regex("\\.css$", each.key)) ? "text/css" : (
+    can(regex("\\.js$", each.key)) ? "application/javascript" : (
+    can(regex("\\.png$", each.key)) ? "image/png" : (
+    can(regex("\\.jpg$", each.key)) ? "image/jpeg" : "application/octet-stream"))))
 }

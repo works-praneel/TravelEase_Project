@@ -9,3 +9,7 @@ resource "aws_ecr_repository" "flight_repo" {
 resource "aws_ecr_repository" "payment_repo" {
   name = "payment-service"
 }
+
+resource "aws_ecr_repository" "crowdpulse_repo" {
+  name = "crowdpulse-service"
+}

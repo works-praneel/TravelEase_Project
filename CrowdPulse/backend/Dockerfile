@@ -2,15 +2,14 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# Install dependencies first (faster builds)
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy all backend files into the container
+# Copy backend files into the container
 COPY . .
 
+# Install dependencies
+RUN pip install --no-cache-dir flask flask-cors vaderSentiment google-api-python-client python-dotenv textblob
+
+# Expose port 5010 for the API
 EXPOSE 5010
 
-ENV PYTHONUNBUFFERED=1
-
+# Run the backend app
 CMD ["python", "crowdpulse_app.py"]
