@@ -25,3 +25,16 @@ variable "payment_image" {
   default = "904233121598.dkr.ecr.eu-north-1.amazonaws.com/payment-service:latest"
 }
 
+# CrowdPulse ECR Image
+variable "crowdpulse_image" {
+  description = "ECR image URL for the CrowdPulse service"
+  type        = string
+}
+
+# YouTube API Key for real-time sentiment analysis
+variable "youtube_api_key" {
+  description = "YouTube API key used by CrowdPulse"
+  type        = string
+  sensitive   = true
+}
+
