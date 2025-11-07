@@ -23,7 +23,7 @@ pipeline {
         stage('Checkout') {
             steps {
                 echo "Cloning repository..."
-                git branch: 'main', url: 'https://github.com/works-praneel/TravelEase_Internship.git'
+                git branch: 'main', url: 'https://github.com/works-praneel/TravelEase_Project.git'
             }
         }
 
