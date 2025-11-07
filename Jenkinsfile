@@ -9,11 +9,13 @@ pipeline {
         // These will be captured later from Terraform outputs
         S3_BUCKET_NAME = ''
         ALB_DNS_NAME = ''
+        FRONTEND_URL = '' // Added FRONTEND_URL to environment block
+        NEW_ALB_URL = '' // Added NEW_ALB_URL to environment block
 
         // Assuming prod.tfvars is in the project root (..\\)
         TF_VAR_FILE = 'prod.tfvars'
         
-        // Define ALL services and their local Docker directory paths
+        // --- FIX: SERVICE_MAP must be quoted as a string or Groovy expression ---
         SERVICE_MAP = [
             'booking-service': 'Booking_Service',
             'flight-service': 'Flight_Service',
@@ -55,28 +57,27 @@ pipeline {
             }
         }
         
-        stage('Terraform Provisioning') {
+        // ------------------- TERRAFORM (RELIABLE VERSION) -------------------
+        stage('Apply Infrastructure (Terraform)') {
             steps {
-                dir('terraform') { 
-                    echo "Running terraform init..."
-                    bat 'terraform init'
-                    
-                    echo "Running terraform plan..."
-                    // Correctly references prod.tfvars from the project root
-                    bat "terraform plan -var-file=..\\%TF_VAR_FILE% -out=tfplan"
-                    
-                    echo "Running terraform apply..."
-                    bat 'terraform apply -auto-approve tfplan'
-                }
-            }
-        }
-        
-        // --- STAGE 1: CAPTURE TERRAFORM OUTPUTS (FIXED) ---
-        stage('Get Terraform Outputs') {
-            steps {
-                dir('terraform') {
-                    script {
+                script {
+                    // NOTE: Removed hardcoded path D:/Minor/TravelEase/terraform
+                    dir('terraform') { 
+                        echo "Running terraform init..."
+                        bat 'terraform init'
+                        
+                        echo "Running terraform plan..."
+                        // Correctly references prod.tfvars from the project root
+                        bat "terraform plan -var-file=..\\%TF_VAR_FILE% -out=tfplan"
+                        
+                        echo "Running terraform apply..."
+                        bat 'terraform apply -auto-approve tfplan'
+                    }
+
+                    // --- CAPTURE OUTPUTS ---
+                    dir('terraform') {
                         // Capture outputs directly into Groovy variables using sh/bat wrapper
+                        // NOTE: Using sh for 'returnStdout' is more reliable than complex bat logic
                         def albDns = sh(script: 'terraform output -raw alb_dns_name', returnStdout: true).trim()
                         def s3Bucket = sh(script: 'terraform output -raw frontend_bucket_name', returnStdout: true).trim()
                         def frontUrl = sh(script: 'terraform output -raw frontend_website_url', returnStdout: true).trim()
@@ -94,6 +95,9 @@ pipeline {
                             """.stripIndent())
                         }
                         
+                        // Set derived variable for frontend injection
+                        env.NEW_ALB_URL = "http://${env.ALB_DNS_NAME}"
+
                         echo "Captured ALB DNS: ${env.ALB_DNS_NAME}"
                         echo "Captured S3 Bucket: ${env.S3_BUCKET_NAME}"
                     }
@@ -101,10 +105,14 @@ pipeline {
             }
         }
 
+        // ------------------- DOCKER BUILD & PUSH -------------------
         stage('Build, Tag, and Push Images') {
             steps {
                 script {
-                    env.SERVICE_MAP.each { serviceName, serviceDirectory ->
+                    // Ensure the environment variable map is parsed correctly before use
+                    def services = readJSON text: env.SERVICE_MAP
+
+                    services.each { serviceName, serviceDirectory ->
                         
                         echo "Building and pushing image for service: ${serviceName}"
 
@@ -123,12 +131,12 @@ pipeline {
             }
         }
         
-        // --- STAGE 2: PREPARE AND DEPLOY FRONTEND (URL INJECTION) ---
+        // ------------------- FRONTEND DEPLOYMENT -------------------
         stage('Prepare & Deploy Frontend') {
             steps {
                 echo "1. Replacing API URLs in frontend files..."
                 script {
-                    def newAlbUrl = "http://${env.ALB_DNS_NAME}"
+                    def newAlbUrl = env.NEW_ALB_URL
                     
                     // a) Update index.html: Replace the old hardcoded ALB URL placeholder in the JS block.
                     bat "powershell -Command \"(Get-Content index.html) -replace '${env.OLD_ALB_URL_PLACEHOLDER}', '${newAlbUrl}' | Set-Content index.html\""
@@ -149,10 +157,12 @@ pipeline {
             }
         }
         
+        // ------------------- ECS DEPLOYMENT -------------------
         stage('Deploy to Fargate') {
             steps {
                 script {
-                    env.SERVICE_MAP.keySet().each { serviceName ->
+                    def services = ['flight-service', 'booking-service', 'payment-service', 'crowdpulse-service']
+                    services.each { serviceName ->
                         echo "Deploying service: ${serviceName} to Fargate..."
                         // Force ECS to pull the latest image and restart the task
                         bat "aws ecs update-service --cluster ${CLUSTER_NAME} --service ${serviceName} --force-new-deployment"
@@ -161,17 +171,18 @@ pipeline {
             }
         }
         
-        // --- FINAL STAGE: OUTPUT FRONTEND URL ---
+        // ------------------- FINAL STAGE: OUTPUTS -------------------
         stage('Display Outputs') {
             steps {
-                dir('terraform') {
-                    // Get the final S3 website endpoint URL (frontend_website_url output must exist)
-                    // The FRONTEND_URL variable already holds this value from the Get Terraform Outputs stage.
-                    bat 'echo FINAL WEBSITE URL: %FRONTEND_URL%'
+                script {
+                    echo '--------------------------------------------'
+                    echo '✅ TravelEase Deployment Complete'
+                    echo "Backend ALB DNS         : ${env.ALB_DNS_NAME}"
+                    echo "Frontend S3 Bucket      : ${env.S3_BUCKET_NAME}"
+                    echo "Frontend Website URL    : ${env.FRONTEND_URL}"
+                    echo "Frontend uses backend   : ${env.NEW_ALB_URL}"
+                    echo '--------------------------------------------'
                 }
-                
-                // Display ALB DNS explicitly
-                bat 'echo ALB DNS (Backend API): http://%ALB_DNS_NAME%'
             }
         }
     }
