@@ -1,6 +1,16 @@
 FROM python:3.10-slim
+
 WORKDIR /app
+
+# Install dependencies first (faster builds)
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy all backend files into the container
 COPY . .
-RUN pip install --no-cache-dir flask flask-cors vaderSentiment google-api-python-client python-dotenv textblob
+
 EXPOSE 5010
-CMD ["python", "CrowdPulse_Service.py"]
+
+ENV PYTHONUNBUFFERED=1
+
+CMD ["python", "crowdpulse_app.py"]

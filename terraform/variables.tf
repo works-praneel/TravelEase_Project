@@ -25,16 +25,17 @@ variable "payment_image" {
   default = "904233121598.dkr.ecr.eu-north-1.amazonaws.com/payment-service:latest"
 }
 
-# CrowdPulse ECR Image
+# --- CrowdPulse Configuration ---
 variable "crowdpulse_image" {
   description = "ECR image URL for the CrowdPulse service"
   type        = string
+  default     = "904233121598.dkr.ecr.eu-north-1.amazonaws.com/crowdpulse-service:latest"
 }
 
-# YouTube API Key for real-time sentiment analysis
 variable "youtube_api_key" {
   description = "YouTube API key used by CrowdPulse"
   type        = string
+  default     = "AIzaSyC4FAL-z4kSa-dzPHN52RiN57lYOaUCXpE" # Optional for local runs; set via Terraform vars/env in prod
   sensitive   = true
 }
 
