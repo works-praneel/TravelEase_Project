@@ -20,22 +20,23 @@ pipeline {
             }
         }
 
-        stage('Login to AWS & ECR') {
+stage('Login to AWS & ECR') {
             steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-jenkins-creds'
-        ]]) {
-            bat '''
-            set AWS_ACCESS_KEY_ID=%AWS_ACCESS_KEY_ID%
-            set AWS_SECRET_ACCESS_KEY=%AWS_SECRET_ACCESS_KEY%
-            set AWS_DEFAULT_REGION=%AWS_REGION%
-            aws sts get-caller-identity
-            for /f "delims=" %%a in ('aws ecr get-login-password --region %AWS_REGION%') do docker login --username AWS --password %%a %ECR_REGISTRY%
-            '''
+                withCredentials([usernamePassword(
+                    credentialsId: 'BNmnx0bIy24ahJTSUi6MIEpYUVmCTV8dyMBfH6cq',
+                    usernameVariable: 'AWS_ACCESS_KEY_ID',
+                    passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                )]) {
+                    bat """
+                    aws configure set aws_access_key_id %AWS_ACCESS_KEY_ID%
+                    aws configure set aws_secret_access_key %AWS_SECRET_ACCESS_KEY%
+                    aws configure set region %AWS_REGION%
+                    aws ecr get-login-password --region %AWS_REGION% | docker login --username AWS --password-stdin %ECR_REGISTRY%
+                    """
+                }
+            }
         }
-    }
-}
+
 
 
         stage('Apply Infrastructure (Terraform)') {
