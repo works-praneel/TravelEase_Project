@@ -49,7 +49,6 @@ pipeline {
                         bat 'terraform plan'
                         bat 'terraform apply -auto-approve'
 
-                        // safer PowerShell-based extraction (avoids "null")
                         env.ALB_DNS = powershell(returnStdout: true, script: 'terraform output -raw load_balancer_dns').trim()
                         env.S3_BUCKET_NAME = powershell(returnStdout: true, script: 'terraform output -raw frontend_bucket_name').trim()
                         env.NEW_ALB_URL = "http://${env.ALB_DNS}"
@@ -134,8 +133,10 @@ pipeline {
         stage('Display Outputs') {
             steps {
                 script {
-                    def s3WebsiteUrl = powershell(returnStdout: true, script: 'terraform -chdir=terraform output -raw frontend_website_url').trim()
-                    env.S3_URL = s3WebsiteUrl
+                    env.ALB_DNS = powershell(returnStdout: true, script: 'terraform -chdir=terraform output -raw load_balancer_dns').trim()
+                    env.S3_BUCKET_NAME = powershell(returnStdout: true, script: 'terraform -chdir=terraform output -raw frontend_bucket_name').trim()
+                    env.S3_URL = powershell(returnStdout: true, script: 'terraform -chdir=terraform output -raw frontend_website_url').trim()
+                    env.NEW_ALB_URL = "http://${env.ALB_DNS}"
 
                     echo "✅ TravelEase Deployment Complete!"
                     echo "-------------------------------------"
@@ -155,11 +156,11 @@ pipeline {
 
             script {
                 echo "🌐 Opening deployed TravelEase website..."
-                bat '''
+                bat """
                 echo Launching frontend in browser...
-                powershell -Command "Start-Process 'chrome.exe' 'http://${env:S3_URL}'"
+                powershell -Command "Start-Process 'chrome.exe' 'http://${env.S3_URL}'"
                 powershell -Command "Start-Sleep -Seconds 3"
-                '''
+                """
             }
         }
 
