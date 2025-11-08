@@ -51,10 +51,10 @@ pipeline {
 
                         env.ALB_DNS = bat(returnStdout: true, script: 'terraform output -raw load_balancer_dns').trim()
                         env.S3_BUCKET_NAME = bat(returnStdout: true, script: 'terraform output -raw frontend_bucket_name').trim()
-                        env.NEW_ALB_URL = "http://${ALB_DNS}"
+                        env.NEW_ALB_URL = "http://${env.ALB_DNS}"
 
-                        echo "✅ Captured ALB DNS: ${ALB_DNS}"
-                        echo "✅ Captured S3 Bucket: ${S3_BUCKET_NAME}"
+                        echo "✅ Captured ALB DNS: ${env.ALB_DNS}"
+                        echo "✅ Captured S3 Bucket: ${env.S3_BUCKET_NAME}"
                     }
                 }
             }
