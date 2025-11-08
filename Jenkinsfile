@@ -5,14 +5,14 @@ pipeline {
         AWS_REGION = 'eu-north-1'
         ECR_REGISTRY = '904233121598.dkr.ecr.eu-north-1.amazonaws.com'
         CLUSTER_NAME = 'TravelEaseCluster'
-        REPO_DIR = 'works-praneel/travelease_project/TravelEase_Project-239fa85907536e1e224456f82c849cd92624898e'
+        REPO_DIR = 'TravelEase_Project'
         ALB_DNS = ''
         S3_BUCKET_NAME = ''
         NEW_ALB_URL = ''
     }
 
     triggers {
-        pollSCM('H/5 * * * *') // check for repo changes every 5 min
+        pollSCM('H/2 * * * *') // check for repo changes every 2 minutes
     }
 
     stages {
@@ -20,7 +20,7 @@ pipeline {
         stage('Checkout') {
             steps {
                 echo "Cloning repository..."
-                git branch: 'main', url: 'https://github.com/works-praneel/TravelEase_Internship.git'
+                git branch: 'main', url: 'https://github.com/works-praneel/TravelEase_Project.git'
             }
         }
 
@@ -46,6 +46,9 @@ pipeline {
             steps {
                 script {
                     dir("${REPO_DIR}/terraform") {
+                        echo "📂 Checking directory before Terraform execution..."
+                        bat 'dir'
+
                         bat 'terraform init'
                         bat 'terraform plan'
                         bat 'terraform apply -auto-approve'
@@ -54,8 +57,8 @@ pipeline {
                         env.S3_BUCKET_NAME = bat(returnStdout: true, script: 'terraform output -raw frontend_bucket_name').trim()
                         env.NEW_ALB_URL = "http://${ALB_DNS}"
 
-                        echo "Captured ALB DNS: ${ALB_DNS}"
-                        echo "Captured S3 Bucket: ${S3_BUCKET_NAME}"
+                        echo "✅ Captured ALB DNS: ${ALB_DNS}"
+                        echo "✅ Captured S3 Bucket: ${S3_BUCKET_NAME}"
                     }
                 }
             }
@@ -64,7 +67,7 @@ pipeline {
         stage('Update Frontend & Deploy via Script') {
             steps {
                 script {
-                    echo "Running Python script to update frontend URLs and deploy to S3..."
+                    echo "🚀 Running Python script to update frontend URLs and deploy to S3..."
                     bat "python ${REPO_DIR}\\update_frontend_and_deploy.py ${NEW_ALB_URL} ${S3_BUCKET_NAME} ${REPO_DIR}"
                 }
             }
