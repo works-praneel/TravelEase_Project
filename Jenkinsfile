@@ -20,7 +20,7 @@ pipeline {
             }
         }
 
-stage('Login to AWS & ECR') {
+        stage('Login to AWS & ECR') {
             steps {
                 withCredentials([usernamePassword(
                     credentialsId: 'BNmnx0bIy24ahJTSUi6MIEpYUVmCTV8dyMBfH6cq',
@@ -37,8 +37,6 @@ stage('Login to AWS & ECR') {
             }
         }
 
-
-
         stage('Apply Infrastructure (Terraform)') {
             steps {
                 dir("${TERRAFORM_DIR}") {
@@ -54,11 +52,19 @@ stage('Login to AWS & ECR') {
         stage('Fetch Terraform Outputs') {
             steps {
                 script {
-                    def outputs = readJSON file: "${TERRAFORM_DIR}/tf_outputs.json"
+                    try {
+                        // Try reading JSON normally (if plugin available)
+                        def outputs = readJSON file: "${TERRAFORM_DIR}/tf_outputs.json"
+                        env.ALB_DNS = outputs.load_balancer_dns.value
+                        env.S3_BUCKET_NAME = outputs.frontend_bucket_name.value
+                        env.FRONTEND_WEBSITE = outputs.frontend_website_url.value
+                    } catch (Exception e) {
+                        // Fallback to PowerShell (if plugin not installed)
+                        env.ALB_DNS = powershell(returnStdout: true, script: "terraform -chdir=${TERRAFORM_DIR} output -raw load_balancer_dns").trim()
+                        env.S3_BUCKET_NAME = powershell(returnStdout: true, script: "terraform -chdir=${TERRAFORM_DIR} output -raw frontend_bucket_name").trim()
+                        env.FRONTEND_WEBSITE = powershell(returnStdout: true, script: "terraform -chdir=${TERRAFORM_DIR} output -raw frontend_website_url").trim()
+                    }
 
-                    env.ALB_DNS = outputs.load_balancer_dns.value
-                    env.S3_BUCKET_NAME = outputs.frontend_bucket_name.value
-                    env.FRONTEND_WEBSITE = outputs.frontend_website_url.value
                     env.FRONTEND_URL = "http://${env.ALB_DNS}"
 
                     echo "--------------------------------------"
@@ -71,12 +77,15 @@ stage('Login to AWS & ECR') {
             }
         }
 
+        // ✅ Updated for Windows: No bash/WSL; uses Python instead
         stage('Update Frontend URL') {
             steps {
-                bat '''
-                echo Updating ALB URL in index.html using update_frontend_url.sh...
-                bash update_frontend_url.sh index.html %FRONTEND_URL%
-                '''
+                script {
+                    echo "🚀 Updating frontend URLs and deploying to S3..."
+                    bat """
+                    "C:\\Users\\bruhn\\AppData\\Local\\Programs\\Python\\Python311\\python.exe" update_frontend_and_deploy.py ${env.FRONTEND_URL} ${env.S3_BUCKET_NAME} .
+                    """
+                }
             }
         }
 
@@ -122,8 +131,8 @@ stage('Login to AWS & ECR') {
             steps {
                 bat '''
                 echo Running Python data population scripts...
-                python populate_smart_trips_db.py
-                python Flight_Service\\populate_flights_db.py
+                "C:\\Users\\bruhn\\AppData\\Local\\Programs\\Python\\Python311\\python.exe" populate_smart_trips_db.py
+                "C:\\Users\\bruhn\\AppData\\Local\\Programs\\Python\\Python311\\python.exe" Flight_Service\\populate_flights_db.py
                 '''
             }
         }
@@ -131,7 +140,7 @@ stage('Login to AWS & ECR') {
         stage('TravelEase Deployment Complete') {
             steps {
                 echo "--------------------------------------"
-                echo "TravelEase Deployment Complete!"
+                echo "✅ TravelEase Deployment Complete!"
                 echo "Backend ALB DNS: ${env.ALB_DNS}"
                 echo "Frontend S3 Bucket Name: ${env.S3_BUCKET_NAME}"
                 echo "Frontend Website URL: ${env.FRONTEND_WEBSITE}"
@@ -145,7 +154,7 @@ stage('Login to AWS & ECR') {
                 echo "🌐 Opening deployed TravelEase website..."
                 bat """
                 echo Launching frontend in browser...
-                powershell -Command "Start-Process 'chrome.exe' '${env.FRONTEND_URL}'"
+                powershell -Command "Start-Process 'chrome.exe' 'http://${env.FRONTEND_WEBSITE}'"
                 powershell -Command "Start-Sleep -Seconds 3"
                 """
             }
