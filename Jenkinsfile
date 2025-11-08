@@ -5,154 +5,141 @@ pipeline {
         AWS_REGION = 'eu-north-1'
         ECR_REGISTRY = '904233121598.dkr.ecr.eu-north-1.amazonaws.com'
         CLUSTER_NAME = 'TravelEaseCluster'
-        ALB_DNS = ''
-        S3_BUCKET_NAME = ''
-        NEW_ALB_URL = ''
-        S3_URL = ''
+        TERRAFORM_DIR = 'terraform'
     }
 
     triggers {
-        pollSCM('H/2 * * * *')
+        pollSCM('H/2 * * * *') // Poll every 2 minutes
     }
 
     stages {
 
-        stage('Checkout') {
+        stage('Checkout SCM') {
             steps {
-                echo "Cloning repository..."
-                git branch: 'main', url: 'https://github.com/works-praneel/TravelEase_Project.git'
+                checkout scm
             }
         }
 
         stage('Login to AWS & ECR') {
             steps {
-                withCredentials([usernamePassword(
-                    credentialsId: 'BNmnx0bIy24ahJTSUi6MIEpYUVmCTV8dyMBfH6cq',
-                    usernameVariable: 'AWS_ACCESS_KEY_ID',
-                    passwordVariable: 'AWS_SECRET_ACCESS_KEY'
-                )]) {
-                    bat """
-                    aws configure set aws_access_key_id %AWS_ACCESS_KEY_ID%
-                    aws configure set aws_secret_access_key %AWS_SECRET_ACCESS_KEY%
-                    aws configure set region %AWS_REGION%
-                    aws ecr get-login-password --region %AWS_REGION% | docker login --username AWS --password-stdin %ECR_REGISTRY%
-                    """
+                withAWS(region: "${AWS_REGION}", credentials: 'aws-jenkins-creds') {
+                    bat '''
+                    aws sts get-caller-identity
+                    for /f "delims=" %%a in ('aws ecr get-login-password --region %AWS_REGION%') do docker login --username AWS --password %%a %ECR_REGISTRY%
+                    '''
                 }
             }
         }
 
         stage('Apply Infrastructure (Terraform)') {
             steps {
+                dir("${TERRAFORM_DIR}") {
+                    bat '''
+                    terraform init -input=false
+                    terraform apply -auto-approve
+                    terraform output -json > tf_outputs.json
+                    '''
+                }
+            }
+        }
+
+        stage('Fetch Terraform Outputs') {
+            steps {
                 script {
-                    dir('terraform') {
-                        bat 'terraform init'
-                        bat 'terraform plan'
-                        bat 'terraform apply -auto-approve'
+                    def outputs = readJSON file: "${TERRAFORM_DIR}/tf_outputs.json"
 
-                        env.ALB_DNS = powershell(returnStdout: true, script: 'terraform output -raw load_balancer_dns').trim()
-                        env.S3_BUCKET_NAME = powershell(returnStdout: true, script: 'terraform output -raw frontend_bucket_name').trim()
-                        env.NEW_ALB_URL = "http://${env.ALB_DNS}"
+                    env.ALB_DNS = outputs.load_balancer_dns.value
+                    env.S3_BUCKET_NAME = outputs.frontend_bucket_name.value
+                    env.FRONTEND_WEBSITE = outputs.frontend_website_url.value
+                    env.FRONTEND_URL = "http://${env.ALB_DNS}"
 
-                        echo "✅ Captured ALB DNS: ${env.ALB_DNS}"
-                        echo "✅ Captured S3 Bucket: ${env.S3_BUCKET_NAME}"
-                        echo "✅ Constructed ALB URL: ${env.NEW_ALB_URL}"
+                    echo "--------------------------------------"
+                    echo "Backend ALB DNS: ${env.ALB_DNS}"
+                    echo "Frontend S3 Bucket Name: ${env.S3_BUCKET_NAME}"
+                    echo "Frontend Website URL: ${env.FRONTEND_WEBSITE}"
+                    echo "Frontend uses backend at: ${env.FRONTEND_URL}"
+                    echo "--------------------------------------"
+                }
+            }
+        }
+
+        stage('Update Frontend URL') {
+            steps {
+                bat '''
+                echo Updating ALB URL in index.html using update_frontend_url.sh...
+                bash update_frontend_url.sh index.html %FRONTEND_URL%
+                '''
+            }
+        }
+
+        stage('Build & Push Docker Images') {
+            steps {
+                script {
+                    def images = ['Booking_Service', 'Flight_Service', 'Payment_Service', 'CrowdPulse']
+                    for (img in images) {
+                        bat """
+                        echo Building and pushing ${img}...
+                        docker build -t %ECR_REGISTRY%/${img.toLowerCase()}:latest ${img}
+                        docker push %ECR_REGISTRY%/${img.toLowerCase()}:latest
+                        """
                     }
                 }
             }
         }
 
-        stage('Update Frontend & Deploy via Script') {
+        stage('Force ECS Service Redeploy') {
             steps {
-                script {
-                    echo "🕓 Waiting 10 seconds for ALB to stabilize..."
-                    bat "powershell -Command Start-Sleep -Seconds 10"
-
-                    echo "🚀 Updating frontend and deploying to S3..."
-                    bat """
-                    "C:\\Users\\bruhn\\AppData\\Local\\Programs\\Python\\Python311\\python.exe" update_frontend_and_deploy.py ${env.NEW_ALB_URL} ${env.S3_BUCKET_NAME} .
-                    """
-                }
+                bat '''
+                echo Redeploying ECS Services...
+                aws ecs update-service --cluster %CLUSTER_NAME% --service booking-service --force-new-deployment --region %AWS_REGION%
+                aws ecs update-service --cluster %CLUSTER_NAME% --service flight-service --force-new-deployment --region %AWS_REGION%
+                aws ecs update-service --cluster %CLUSTER_NAME% --service payment-service --force-new-deployment --region %AWS_REGION%
+                aws ecs update-service --cluster %CLUSTER_NAME% --service crowdpulse-service --force-new-deployment --region %AWS_REGION%
+                '''
             }
         }
 
-        stage('Build, Tag, and Push Images') {
+        stage('Upload Frontend Files to S3') {
             steps {
-                script {
-                    def services = [
-                        'flight-service': 'Flight_Service',
-                        'booking-service': 'Booking_Service',
-                        'payment-service': 'Payment_Service',
-                        'crowdpulse-service': 'CrowdPulse\\backend'
-                    ]
-
-                    services.each { serviceName, serviceDirectory ->
-                        echo "Building and pushing image for ${serviceName}..."
-                        bat "docker build -t ${serviceName} .\\${serviceDirectory}"
-                        bat "docker tag ${serviceName}:latest ${env.ECR_REGISTRY}/${serviceName}:latest"
-                        bat "docker push ${env.ECR_REGISTRY}/${serviceName}:latest"
-                    }
-                }
-            }
-        }
-
-        stage('Deploy to Fargate') {
-            steps {
-                script {
-                    def services = ['flight-service', 'booking-service', 'payment-service', 'crowdpulse-service']
-                    services.each { serviceName ->
-                        bat "aws ecs update-service --cluster ${env.CLUSTER_NAME} --service ${serviceName} --force-new-deployment --region ${env.AWS_REGION}"
-                    }
-                }
-            }
-        }
-
-        stage('Install Python Dependencies') {
-            steps {
-                script {
-                    echo "📦 Installing required Python libraries for AWS DynamoDB operations..."
-                    bat """
-                    "C:\\Users\\bruhn\\AppData\\Local\\Programs\\Python\\Python311\\python.exe" -m pip install --upgrade pip
-                    "C:\\Users\\bruhn\\AppData\\Local\\Programs\\Python\\Python311\\python.exe" -m pip install boto3 botocore python-dateutil
-                    """
-                }
+                bat '''
+                echo Uploading updated frontend assets to s3://%S3_BUCKET_NAME% ...
+                aws s3 cp index.html s3://%S3_BUCKET_NAME%/index.html --content-type text/html
+                aws s3 cp CrowdPulse\\frontend\\crowdpulse_widget.html s3://%S3_BUCKET_NAME%/crowdpulse_widget.html --content-type text/html
+                aws s3 cp images\\travelease_logo.png s3://%S3_BUCKET_NAME%/images/travelease_logo.png --content-type image/png
+                '''
             }
         }
 
         stage('Populate Databases') {
             steps {
-                script {
-                    echo "🧩 Populating DynamoDB tables..."
-                    bat """
-                    "C:\\Users\\bruhn\\AppData\\Local\\Programs\\Python\\Python311\\python.exe" populate_smart_trips_db.py
-                    "C:\\Users\\bruhn\\AppData\\Local\\Programs\\Python\\Python311\\python.exe" Flight_Service\\populate_flights_db.py
-                    """
-                }
+                bat '''
+                echo Running Python data population scripts...
+                python populate_smart_trips_db.py
+                python Flight_Service\\populate_flights_db.py
+                '''
             }
         }
 
-        // ✅ Updated Display Outputs Stage (now persists properly)
-        stage('Display Outputs') {
+        stage('TravelEase Deployment Complete') {
             steps {
-                script {
-                    // Always fetch Terraform outputs from correct directory
-                    def albDns = powershell(returnStdout: true, script: 'terraform -chdir=terraform output -raw load_balancer_dns').trim()
-                    def s3Bucket = powershell(returnStdout: true, script: 'terraform -chdir=terraform output -raw frontend_bucket_name').trim()
-                    def s3WebsiteUrl = powershell(returnStdout: true, script: 'terraform -chdir=terraform output -raw frontend_website_url').trim()
+                echo "--------------------------------------"
+                echo "TravelEase Deployment Complete!"
+                echo "Backend ALB DNS: ${env.ALB_DNS}"
+                echo "Frontend S3 Bucket Name: ${env.S3_BUCKET_NAME}"
+                echo "Frontend Website URL: ${env.FRONTEND_WEBSITE}"
+                echo "Frontend uses backend at: ${env.FRONTEND_URL}"
+                echo "--------------------------------------"
+            }
+        }
 
-                    // Persist to Jenkins environment
-                    env.ALB_DNS = albDns
-                    env.S3_BUCKET_NAME = s3Bucket
-                    env.S3_URL = s3WebsiteUrl
-                    env.NEW_ALB_URL = "http://${albDns}"
-
-                    echo "✅ TravelEase Deployment Complete!"
-                    echo "-------------------------------------"
-                    echo "Backend ALB DNS: ${env.ALB_DNS}"
-                    echo "Frontend S3 Bucket Name: ${env.S3_BUCKET_NAME}"
-                    echo "Frontend Website URL: ${env.S3_URL}"
-                    echo "Frontend uses backend at: ${env.NEW_ALB_URL}"
-                    echo "-------------------------------------"
-                }
+        stage('Open Deployed Website') {
+            steps {
+                echo "🌐 Opening deployed TravelEase website..."
+                bat """
+                echo Launching frontend in browser...
+                powershell -Command "Start-Process 'chrome.exe' '${env.FRONTEND_URL}'"
+                powershell -Command "Start-Sleep -Seconds 3"
+                """
             }
         }
     }
@@ -160,19 +147,9 @@ pipeline {
     post {
         success {
             echo '✅ Deployment completed successfully.'
-
-            script {
-                echo "🌐 Opening deployed TravelEase website..."
-                bat """
-                echo Launching frontend in browser...
-                powershell -Command "Start-Process 'chrome.exe' 'http://${env.S3_URL}'"
-                powershell -Command "Start-Sleep -Seconds 3"
-                """
-            }
         }
-
         failure {
-            echo '❌ Deployment failed. Check the logs for details.'
+            echo '❌ Deployment failed. Check logs for details.'
         }
     }
 }
