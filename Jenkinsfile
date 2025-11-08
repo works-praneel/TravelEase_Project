@@ -66,7 +66,7 @@ pipeline {
             steps {
                 script {
                     echo "🕓 Waiting 10 seconds for ALB to stabilize..."
-                    bat "timeout /t 10 >nul"
+                    bat "powershell -Command Start-Sleep -Seconds 10"
 
                     echo "🚀 Updating frontend and deploying to S3..."
                     bat """
