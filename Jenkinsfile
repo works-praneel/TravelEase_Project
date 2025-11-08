@@ -102,7 +102,17 @@ pipeline {
                 }
             }
         }
-
+        stage('Install Python Dependencies') {
+            steps {
+                script {
+                    echo "📦 Installing required Python libraries for AWS DynamoDB operations..."
+                    bat """
+                    "C:\\Users\\bruhn\\AppData\\Local\\Programs\\Python\\Python311\\python.exe" -m pip install --upgrade pip
+                    "C:\\Users\\bruhn\\AppData\\Local\\Programs\\Python\\Python311\\python.exe" -m pip install boto3 botocore python-dateutil
+                    """
+                }
+            }
+        }
         // 🧩 DynamoDB population
         stage('Populate Databases') {
             steps {
