@@ -44,7 +44,7 @@ pipeline {
             steps {
                 script {
                     dir('terraform') {
-                        bat 'dir'   // Show contents
+                        bat 'dir'
                         bat 'terraform init'
                         bat 'terraform plan'
                         bat 'terraform apply -auto-approve'
@@ -132,17 +132,26 @@ pipeline {
         success {
             echo '✅ Deployment completed successfully.'
 
-            // 🚀 Automatically open the frontend website after success
             script {
-                def s3WebsiteUrl = bat(returnStdout: true, script: """
+                // Fetch clean website URL safely
+                def s3WebsiteUrl = bat(returnStdout: true, script: '''
+                    @echo off
                     cd terraform
-                    terraform output -raw frontend_website_url
-                """).trim()
+                    for /f "usebackq delims=" %%i in (terraform output -raw frontend_website_url) do set WEBSITE_URL=%%i
+                    echo %WEBSITE_URL%
+                ''').trim()
 
-                echo "🌐 Opening deployed TravelEase website: http://${s3WebsiteUrl}"
-                bat "start http://${s3WebsiteUrl}"
+                echo "🌐 Deployed TravelEase website:"
+                echo "👉 http://${s3WebsiteUrl}"
+
+                // Try to open in Chrome (if Jenkins runs interactively)
+                bat """
+                echo Launching TravelEase frontend in browser...
+                start chrome http://${s3WebsiteUrl} || start msedge http://${s3WebsiteUrl}
+                """
             }
         }
+
         failure {
             echo '❌ Deployment failed. Check the logs for details.'
         }
