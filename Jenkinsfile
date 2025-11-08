@@ -130,13 +130,20 @@ pipeline {
             }
         }
 
+        // ✅ Updated Display Outputs Stage (now persists properly)
         stage('Display Outputs') {
             steps {
                 script {
-                    env.ALB_DNS = powershell(returnStdout: true, script: 'terraform -chdir=terraform output -raw load_balancer_dns').trim()
-                    env.S3_BUCKET_NAME = powershell(returnStdout: true, script: 'terraform -chdir=terraform output -raw frontend_bucket_name').trim()
-                    env.S3_URL = powershell(returnStdout: true, script: 'terraform -chdir=terraform output -raw frontend_website_url').trim()
-                    env.NEW_ALB_URL = "http://${env.ALB_DNS}"
+                    // Always fetch Terraform outputs from correct directory
+                    def albDns = powershell(returnStdout: true, script: 'terraform -chdir=terraform output -raw load_balancer_dns').trim()
+                    def s3Bucket = powershell(returnStdout: true, script: 'terraform -chdir=terraform output -raw frontend_bucket_name').trim()
+                    def s3WebsiteUrl = powershell(returnStdout: true, script: 'terraform -chdir=terraform output -raw frontend_website_url').trim()
+
+                    // Persist to Jenkins environment
+                    env.ALB_DNS = albDns
+                    env.S3_BUCKET_NAME = s3Bucket
+                    env.S3_URL = s3WebsiteUrl
+                    env.NEW_ALB_URL = "http://${albDns}"
 
                     echo "✅ TravelEase Deployment Complete!"
                     echo "-------------------------------------"
