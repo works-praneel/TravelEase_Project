@@ -90,20 +90,25 @@ pipeline {
         }
 
         stage('Build & Push Docker Images') {
-            steps {
-                script {
-                    def images = ['Booking_Service', 'Flight_Service', 'Payment_Service', 'CrowdPulse']
-                    for (img in images) {
-                        bat """
-                        echo Building and pushing ${img}...
-                        docker build -t %ECR_REGISTRY%/${img.toLowerCase()}:latest ${img}
-                        docker push %ECR_REGISTRY%/${img.toLowerCase()}:latest
-                        """
-                    }
-                }
+    steps {
+        script {
+            def services = [
+                'booking-service': 'Booking_Service',
+                'flight-service': 'Flight_Service',
+                'payment-service': 'Payment_Service',
+                'crowdpulse-service': 'CrowdPulse\\backend'
+            ]
+
+            services.each { repoName, folder ->
+                echo "Building and pushing image for ${repoName}..."
+                bat """
+                docker build -t %ECR_REGISTRY%/${repoName}:latest ${folder}
+                docker push %ECR_REGISTRY%/${repoName}:latest
+                """
             }
         }
-
+    }
+        }
         stage('Force ECS Service Redeploy') {
             steps {
                 bat '''
