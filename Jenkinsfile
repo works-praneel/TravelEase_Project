@@ -131,6 +131,17 @@ pipeline {
     post {
         success {
             echo '✅ Deployment completed successfully.'
+
+            // 🚀 Automatically open the frontend website after success
+            script {
+                def s3WebsiteUrl = bat(returnStdout: true, script: """
+                    cd terraform
+                    terraform output -raw frontend_website_url
+                """).trim()
+
+                echo "🌐 Opening deployed TravelEase website: http://${s3WebsiteUrl}"
+                bat "start http://${s3WebsiteUrl}"
+            }
         }
         failure {
             echo '❌ Deployment failed. Check the logs for details.'
