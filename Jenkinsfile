@@ -64,7 +64,7 @@ pipeline {
             steps {
                 script {
                     echo "🚀 Running Python script to update frontend URLs and deploy to S3..."
-                    bat "python update_frontend_and_deploy.py ${NEW_ALB_URL} ${S3_BUCKET_NAME} ."
+                    bat "python update_frontend_and_deploy.py ${env.NEW_ALB_URL} ${env.S3_BUCKET_NAME} ."
                 }
             }
         }
