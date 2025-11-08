@@ -48,7 +48,7 @@ pipeline {
                         bat 'terraform plan'
                         bat 'terraform apply -auto-approve'
 
-                        // ✅ Safe PowerShell output extraction
+                        // ✅ safer PowerShell-based extraction
                         env.ALB_DNS = powershell(returnStdout: true, script: 'terraform output -raw load_balancer_dns').trim()
                         env.S3_BUCKET_NAME = powershell(returnStdout: true, script: 'terraform output -raw frontend_bucket_name').trim()
                         env.NEW_ALB_URL = "http://${env.ALB_DNS}"
@@ -103,11 +103,11 @@ pipeline {
             }
         }
 
-        // 🧩 Populating DynamoDB Data Stage
+        // 🧩 DynamoDB population
         stage('Populate Databases') {
             steps {
                 script {
-                    echo "🧩 Populating DynamoDB tables with SmartTrips and Flights data..."
+                    echo "🧩 Populating DynamoDB tables..."
                     bat """
                     "C:\\Users\\bruhn\\AppData\\Local\\Programs\\Python\\Python311\\python.exe" populate_smart_trips_db.py
                     "C:\\Users\\bruhn\\AppData\\Local\\Programs\\Python\\Python311\\python.exe" Flight_Service\\populate_flights_db.py
@@ -128,6 +128,8 @@ pipeline {
                     echo "Frontend Website URL: ${s3WebsiteUrl}"
                     echo "Frontend uses backend at: ${env.NEW_ALB_URL}"
                     echo "-------------------------------------"
+
+                    env.S3_URL = s3WebsiteUrl
                 }
             }
         }
@@ -138,30 +140,17 @@ pipeline {
             echo '✅ Deployment completed successfully.'
 
             script {
-                // ✅ Proper variable capture with CALL
-                def s3WebsiteUrl = bat(returnStdout: true, script: '''
-                    @echo off
-                    cd terraform
-                    for /f "usebackq delims=" %%i in (terraform output -raw frontend_website_url) do (
-                        set WEBSITE_URL=%%i
-                    )
-                    call echo %WEBSITE_URL%
-                ''').trim()
-
-                echo "🌐 Deployed TravelEase website:"
-                echo "👉 http://${s3WebsiteUrl}"
-
-                // ✅ Non-blocking browser open (Chrome or Edge)
+                echo "🌐 Opening deployed TravelEase website..."
                 bat """
-                echo Launching TravelEase frontend in background...
-                powershell -Command "Start-Process 'chrome.exe' 'http://${s3WebsiteUrl}'" 2>$null || powershell -Command "Start-Process 'msedge.exe' 'http://${s3WebsiteUrl}'" 2>$null
-                exit /b 0
+                echo Launching frontend in browser...
+                powershell -Command "Start-Process 'chrome.exe' 'http://${env.S3_URL}'"
+                powershell -Command "Start-Sleep -Seconds 3"
                 """
             }
         }
 
         failure {
-            echo '❌ Deployment failed. Check logs for details.'
+            echo '❌ Deployment failed. Check the logs for details.'
         }
     }
 }
