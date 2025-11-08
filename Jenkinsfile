@@ -8,6 +8,7 @@ pipeline {
         ALB_DNS = ''
         S3_BUCKET_NAME = ''
         NEW_ALB_URL = ''
+        S3_URL = ''
     }
 
     triggers {
@@ -48,7 +49,7 @@ pipeline {
                         bat 'terraform plan'
                         bat 'terraform apply -auto-approve'
 
-                        // ✅ safer PowerShell-based extraction
+                        // safer PowerShell-based extraction (avoids "null")
                         env.ALB_DNS = powershell(returnStdout: true, script: 'terraform output -raw load_balancer_dns').trim()
                         env.S3_BUCKET_NAME = powershell(returnStdout: true, script: 'terraform output -raw frontend_bucket_name').trim()
                         env.NEW_ALB_URL = "http://${env.ALB_DNS}"
@@ -64,6 +65,9 @@ pipeline {
         stage('Update Frontend & Deploy via Script') {
             steps {
                 script {
+                    echo "🕓 Waiting 10 seconds for ALB to stabilize..."
+                    bat "timeout /t 10 >nul"
+
                     echo "🚀 Updating frontend and deploying to S3..."
                     bat """
                     "C:\\Users\\bruhn\\AppData\\Local\\Programs\\Python\\Python311\\python.exe" update_frontend_and_deploy.py ${env.NEW_ALB_URL} ${env.S3_BUCKET_NAME} .
@@ -102,6 +106,7 @@ pipeline {
                 }
             }
         }
+
         stage('Install Python Dependencies') {
             steps {
                 script {
@@ -111,9 +116,9 @@ pipeline {
                     "C:\\Users\\bruhn\\AppData\\Local\\Programs\\Python\\Python311\\python.exe" -m pip install boto3 botocore python-dateutil
                     """
                 }
-            }
-        }
-        // 🧩 DynamoDB population
+            }
+        }
+
         stage('Populate Databases') {
             steps {
                 script {
@@ -130,16 +135,15 @@ pipeline {
             steps {
                 script {
                     def s3WebsiteUrl = powershell(returnStdout: true, script: 'terraform -chdir=terraform output -raw frontend_website_url').trim()
+                    env.S3_URL = s3WebsiteUrl
 
                     echo "✅ TravelEase Deployment Complete!"
                     echo "-------------------------------------"
                     echo "Backend ALB DNS: ${env.ALB_DNS}"
                     echo "Frontend S3 Bucket Name: ${env.S3_BUCKET_NAME}"
-                    echo "Frontend Website URL: ${s3WebsiteUrl}"
+                    echo "Frontend Website URL: ${env.S3_URL}"
                     echo "Frontend uses backend at: ${env.NEW_ALB_URL}"
                     echo "-------------------------------------"
-
-                    env.S3_URL = s3WebsiteUrl
                 }
             }
         }
@@ -151,11 +155,11 @@ pipeline {
 
             script {
                 echo "🌐 Opening deployed TravelEase website..."
-                bat """
+                bat '''
                 echo Launching frontend in browser...
-                powershell -Command "Start-Process 'chrome.exe' 'http://${env.S3_URL}'"
+                powershell -Command "Start-Process 'chrome.exe' 'http://${env:S3_URL}'"
                 powershell -Command "Start-Sleep -Seconds 3"
-                """
+                '''
             }
         }
 
