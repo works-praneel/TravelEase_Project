@@ -5,14 +5,13 @@ pipeline {
         AWS_REGION = 'eu-north-1'
         ECR_REGISTRY = '904233121598.dkr.ecr.eu-north-1.amazonaws.com'
         CLUSTER_NAME = 'TravelEaseCluster'
-        REPO_DIR = 'TravelEase_Project'
         ALB_DNS = ''
         S3_BUCKET_NAME = ''
         NEW_ALB_URL = ''
     }
 
     triggers {
-        pollSCM('H/2 * * * *') // check for repo changes every 2 minutes
+        pollSCM('H/2 * * * *')
     }
 
     stages {
@@ -32,7 +31,6 @@ pipeline {
                     passwordVariable: 'AWS_SECRET_ACCESS_KEY'
                 )]) {
                     bat """
-                    echo Configuring AWS CLI and logging into ECR...
                     aws configure set aws_access_key_id %AWS_ACCESS_KEY_ID%
                     aws configure set aws_secret_access_key %AWS_SECRET_ACCESS_KEY%
                     aws configure set region %AWS_REGION%
@@ -45,10 +43,8 @@ pipeline {
         stage('Apply Infrastructure (Terraform)') {
             steps {
                 script {
-                    dir("${REPO_DIR}/terraform") {
-                        echo "📂 Checking directory before Terraform execution..."
-                        bat 'dir'
-
+                    dir('terraform') {
+                        bat 'dir'   // just to show contents once
                         bat 'terraform init'
                         bat 'terraform plan'
                         bat 'terraform apply -auto-approve'
@@ -68,7 +64,7 @@ pipeline {
             steps {
                 script {
                     echo "🚀 Running Python script to update frontend URLs and deploy to S3..."
-                    bat "python ${REPO_DIR}\\update_frontend_and_deploy.py ${NEW_ALB_URL} ${S3_BUCKET_NAME} ${REPO_DIR}"
+                    bat "python update_frontend_and_deploy.py ${NEW_ALB_URL} ${S3_BUCKET_NAME} ."
                 }
             }
         }
@@ -83,13 +79,11 @@ pipeline {
                         'crowdpulse-service': 'CrowdPulse\\backend'
                     ]
 
-                    dir("${REPO_DIR}") {
-                        services.each { serviceName, serviceDirectory ->
-                            echo "Building and pushing image for ${serviceName}..."
-                            bat "docker build -t ${serviceName} .\\${serviceDirectory}"
-                            bat "docker tag ${serviceName}:latest ${ECR_REGISTRY}/${serviceName}:latest"
-                            bat "docker push ${ECR_REGISTRY}/${serviceName}:latest"
-                        }
+                    services.each { serviceName, serviceDirectory ->
+                        echo "Building and pushing image for ${serviceName}..."
+                        bat "docker build -t ${serviceName} .\\${serviceDirectory}"
+                        bat "docker tag ${serviceName}:latest ${ECR_REGISTRY}/${serviceName}:latest"
+                        bat "docker push ${ECR_REGISTRY}/${serviceName}:latest"
                     }
                 }
             }
@@ -110,7 +104,7 @@ pipeline {
             steps {
                 script {
                     def s3WebsiteUrl = bat(returnStdout: true, script: """
-                        cd ${REPO_DIR}\\terraform
+                        cd terraform
                         terraform output -raw frontend_website_url
                     """).trim()
 
