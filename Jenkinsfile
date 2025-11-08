@@ -44,7 +44,7 @@ pipeline {
             steps {
                 script {
                     dir('terraform') {
-                        bat 'dir'   // just to show contents once
+                        bat 'dir'   // Show contents
                         bat 'terraform init'
                         bat 'terraform plan'
                         bat 'terraform apply -auto-approve'
@@ -55,6 +55,7 @@ pipeline {
 
                         echo "✅ Captured ALB DNS: ${env.ALB_DNS}"
                         echo "✅ Captured S3 Bucket: ${env.S3_BUCKET_NAME}"
+                        echo "✅ Constructed ALB URL: ${env.NEW_ALB_URL}"
                     }
                 }
             }
@@ -63,8 +64,15 @@ pipeline {
         stage('Update Frontend & Deploy via Script') {
             steps {
                 script {
-                    echo "🚀 Running Python script to update frontend URLs and deploy to S3..."
-                    bat "python update_frontend_and_deploy.py ${env.NEW_ALB_URL} ${env.S3_BUCKET_NAME} ."
+                    echo "🚀 Preparing to update frontend URLs and deploy to S3..."
+                    echo "🔹 ALB DNS: ${env.ALB_DNS}"
+                    echo "🔹 S3 Bucket: ${env.S3_BUCKET_NAME}"
+                    echo "🔹 NEW ALB URL: ${env.NEW_ALB_URL}"
+
+                    bat """
+                    echo Running Python script using full path...
+                    "C:\\Users\\bruhn\\AppData\\Local\\Programs\\Python\\Python311\\python.exe" update_frontend_and_deploy.py ${env.NEW_ALB_URL} ${env.S3_BUCKET_NAME} .
+                    """
                 }
             }
         }
@@ -82,8 +90,8 @@ pipeline {
                     services.each { serviceName, serviceDirectory ->
                         echo "Building and pushing image for ${serviceName}..."
                         bat "docker build -t ${serviceName} .\\${serviceDirectory}"
-                        bat "docker tag ${serviceName}:latest ${ECR_REGISTRY}/${serviceName}:latest"
-                        bat "docker push ${ECR_REGISTRY}/${serviceName}:latest"
+                        bat "docker tag ${serviceName}:latest ${env.ECR_REGISTRY}/${serviceName}:latest"
+                        bat "docker push ${env.ECR_REGISTRY}/${serviceName}:latest"
                     }
                 }
             }
@@ -94,7 +102,7 @@ pipeline {
                 script {
                     def services = ['flight-service', 'booking-service', 'payment-service', 'crowdpulse-service']
                     services.each { serviceName ->
-                        bat "aws ecs update-service --cluster ${CLUSTER_NAME} --service ${serviceName} --force-new-deployment --region ${AWS_REGION}"
+                        bat "aws ecs update-service --cluster ${env.CLUSTER_NAME} --service ${serviceName} --force-new-deployment --region ${env.AWS_REGION}"
                     }
                 }
             }
@@ -110,10 +118,10 @@ pipeline {
 
                     echo "✅ TravelEase Deployment Complete!"
                     echo "-------------------------------------"
-                    echo "Backend ALB DNS: ${ALB_DNS}"
-                    echo "Frontend S3 Bucket Name: ${S3_BUCKET_NAME}"
+                    echo "Backend ALB DNS: ${env.ALB_DNS}"
+                    echo "Frontend S3 Bucket Name: ${env.S3_BUCKET_NAME}"
                     echo "Frontend Website URL: ${s3WebsiteUrl}"
-                    echo "Frontend uses backend at: ${NEW_ALB_URL}"
+                    echo "Frontend uses backend at: ${env.NEW_ALB_URL}"
                     echo "-------------------------------------"
                 }
             }
