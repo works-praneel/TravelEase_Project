@@ -44,13 +44,13 @@ pipeline {
             steps {
                 script {
                     dir('terraform') {
-                        bat 'dir'
                         bat 'terraform init'
                         bat 'terraform plan'
                         bat 'terraform apply -auto-approve'
 
-                        env.ALB_DNS = bat(returnStdout: true, script: 'terraform output -raw load_balancer_dns').trim()
-                        env.S3_BUCKET_NAME = bat(returnStdout: true, script: 'terraform output -raw frontend_bucket_name').trim()
+                        // ✅ Safe PowerShell output extraction
+                        env.ALB_DNS = powershell(returnStdout: true, script: 'terraform output -raw load_balancer_dns').trim()
+                        env.S3_BUCKET_NAME = powershell(returnStdout: true, script: 'terraform output -raw frontend_bucket_name').trim()
                         env.NEW_ALB_URL = "http://${env.ALB_DNS}"
 
                         echo "✅ Captured ALB DNS: ${env.ALB_DNS}"
@@ -64,13 +64,8 @@ pipeline {
         stage('Update Frontend & Deploy via Script') {
             steps {
                 script {
-                    echo "🚀 Preparing to update frontend URLs and deploy to S3..."
-                    echo "🔹 ALB DNS: ${env.ALB_DNS}"
-                    echo "🔹 S3 Bucket: ${env.S3_BUCKET_NAME}"
-                    echo "🔹 NEW ALB URL: ${env.NEW_ALB_URL}"
-
+                    echo "🚀 Updating frontend and deploying to S3..."
                     bat """
-                    echo Running Python script using full path...
                     "C:\\Users\\bruhn\\AppData\\Local\\Programs\\Python\\Python311\\python.exe" update_frontend_and_deploy.py ${env.NEW_ALB_URL} ${env.S3_BUCKET_NAME} .
                     """
                 }
@@ -108,13 +103,23 @@ pipeline {
             }
         }
 
+        // 🧩 Populating DynamoDB Data Stage
+        stage('Populate Databases') {
+            steps {
+                script {
+                    echo "🧩 Populating DynamoDB tables with SmartTrips and Flights data..."
+                    bat """
+                    "C:\\Users\\bruhn\\AppData\\Local\\Programs\\Python\\Python311\\python.exe" populate_smart_trips_db.py
+                    "C:\\Users\\bruhn\\AppData\\Local\\Programs\\Python\\Python311\\python.exe" Flight_Service\\populate_flights_db.py
+                    """
+                }
+            }
+        }
+
         stage('Display Outputs') {
             steps {
                 script {
-                    def s3WebsiteUrl = bat(returnStdout: true, script: """
-                        cd terraform
-                        terraform output -raw frontend_website_url
-                    """).trim()
+                    def s3WebsiteUrl = powershell(returnStdout: true, script: 'terraform -chdir=terraform output -raw frontend_website_url').trim()
 
                     echo "✅ TravelEase Deployment Complete!"
                     echo "-------------------------------------"
@@ -133,27 +138,30 @@ pipeline {
             echo '✅ Deployment completed successfully.'
 
             script {
-                // Fetch clean website URL safely
+                // ✅ Proper variable capture with CALL
                 def s3WebsiteUrl = bat(returnStdout: true, script: '''
                     @echo off
                     cd terraform
-                    for /f "usebackq delims=" %%i in (terraform output -raw frontend_website_url) do set WEBSITE_URL=%%i
-                    echo %WEBSITE_URL%
+                    for /f "usebackq delims=" %%i in (terraform output -raw frontend_website_url) do (
+                        set WEBSITE_URL=%%i
+                    )
+                    call echo %WEBSITE_URL%
                 ''').trim()
 
                 echo "🌐 Deployed TravelEase website:"
                 echo "👉 http://${s3WebsiteUrl}"
 
-                // Try to open in Chrome (if Jenkins runs interactively)
+                // ✅ Non-blocking browser open (Chrome or Edge)
                 bat """
-                echo Launching TravelEase frontend in browser...
-                start chrome http://${s3WebsiteUrl} || start msedge http://${s3WebsiteUrl}
+                echo Launching TravelEase frontend in background...
+                powershell -Command "Start-Process 'chrome.exe' 'http://${s3WebsiteUrl}'" 2>$null || powershell -Command "Start-Process 'msedge.exe' 'http://${s3WebsiteUrl}'" 2>$null
+                exit /b 0
                 """
             }
         }
 
         failure {
-            echo '❌ Deployment failed. Check the logs for details.'
+            echo '❌ Deployment failed. Check logs for details.'
         }
     }
 }
