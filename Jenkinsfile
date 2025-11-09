@@ -73,6 +73,7 @@ pipeline {
                         env.FRONTEND_URL   = "http://${outputs.load_balancer_dns.value}"
                         env.FRONTEND_SITE  = outputs.frontend_website_url.value
                     } catch (Exception e) {
+                        echo "⚠️ JSON output read failed, falling back to CLI extraction"
                         env.ALB_DNS        = powershell(returnStdout: true, script: "terraform -chdir=${TERRAFORM_DIR} output -raw load_balancer_dns").trim()
                         env.S3_BUCKET_NAME = powershell(returnStdout: true, script: "terraform -chdir=${TERRAFORM_DIR} output -raw frontend_bucket_name").trim()
                         env.FRONTEND_SITE  = powershell(returnStdout: true, script: "terraform -chdir=${TERRAFORM_DIR} output -raw frontend_website_url").trim()
@@ -89,21 +90,7 @@ pipeline {
         }
 
         // -----------------------------
-        // 5. Inject YouTube API Key
-        // -----------------------------
-        stage('Inject YouTube API Key') {
-            steps {
-                withCredentials([string(credentialsId: 'youtube-api-key', variable: 'YOUTUBE_API_KEY')]) {
-                    bat '''
-                    echo Injecting YouTube API Key into build environment...
-                    setx YOUTUBE_API_KEY "%YOUTUBE_API_KEY%"
-                    '''
-                }
-            }
-        }
-
-        // -----------------------------
-        // 6. Update Frontend & Deploy
+        // 5. Update Frontend & Deploy
         // -----------------------------
         stage('Update Frontend URL and Deploy') {
             steps {
@@ -117,7 +104,7 @@ pipeline {
         }
 
         // -----------------------------
-        // 7. Build & Push Docker Images (with Gmail + YouTube keys)
+        // 6. Build & Push Docker Images (Gmail handled here)
         // -----------------------------
         stage('Build & Push Docker Images') {
             steps {
@@ -133,7 +120,6 @@ pipeline {
                         echo "Building and pushing image for ${repoName}..."
 
                         if (repoName == 'booking-service') {
-                            // Gmail credentials for Booking Service
                             withCredentials([
                                 usernamePassword(
                                     credentialsId: 'gmail-user',
@@ -150,22 +136,7 @@ pipeline {
                                 docker push %ECR_REGISTRY%/${repoName}:latest
                                 """
                             }
-                        }
-
-                        else if (repoName == 'crowdpulse-service') {
-                            // YouTube API Key for live vlog support
-                            withCredentials([string(credentialsId: 'youtube-api-key', variable: 'YOUTUBE_API_KEY')]) {
-                                bat """
-                                echo Building CrowdPulse service with live YouTube integration...
-                                docker build ^
-                                    --build-arg YOUTUBE_API_KEY=%YOUTUBE_API_KEY% ^
-                                    -t %ECR_REGISTRY%/${repoName}:latest ${folder}
-                                docker push %ECR_REGISTRY%/${repoName}:latest
-                                """
-                            }
-                        }
-
-                        else {
+                        } else {
                             bat """
                             docker build -t %ECR_REGISTRY%/${repoName}:latest ${folder}
                             docker push %ECR_REGISTRY%/${repoName}:latest
@@ -177,7 +148,7 @@ pipeline {
         }
 
         // -----------------------------
-        // 8. Force ECS Redeployment
+        // 7. Force ECS Redeployment
         // -----------------------------
         stage('Force ECS Redeployment') {
             steps {
@@ -192,7 +163,7 @@ pipeline {
         }
 
         // -----------------------------
-        // 8.1 Inject Gmail Credentials into ECS Booking Service
+        // 8. Inject Gmail Credentials into ECS Booking Service
         // -----------------------------
         stage('Inject Gmail Credentials into ECS Booking Service') {
             steps {
@@ -204,66 +175,47 @@ pipeline {
                     )
                 ]) {
                     echo "🔐 Updating ECS Task Definition for Booking Service with Gmail credentials..."
-
                     bat '''
                     echo Fetching current Booking Service task definition...
                     for /f "delims=" %%A in ('aws ecs describe-services --cluster %CLUSTER_NAME% --services booking-service --query "services[0].taskDefinition" --output text') do set TASK_DEF_ARN=%%A
-                    echo Found Task Definition: %TASK_DEF_ARN%
 
-                    echo Exporting current task definition...
                     aws ecs describe-task-definition --task-definition %TASK_DEF_ARN% --query "taskDefinition" > task_def.json
-
-                    echo Injecting Gmail credentials...
                     powershell -Command "$json = Get-Content task_def.json | ConvertFrom-Json; $json.containerDefinitions[0].environment += @(@{name='EMAIL_USER'; value='%EMAIL_USER%'}, @{name='EMAIL_PASS'; value='%EMAIL_PASS%'}); $json | ConvertTo-Json -Depth 10 | Out-File new_task_def.json -Encoding utf8"
-
-                    echo Registering new ECS task definition revision...
                     aws ecs register-task-definition --cli-input-json file://new_task_def.json > register_output.json
-
-                    echo Forcing ECS redeployment with updated credentials...
-                    for /f "delims=" %%B in ('aws ecs update-service --cluster %CLUSTER_NAME% --service booking-service --force-new-deployment --region %AWS_REGION% --query "service.taskDefinition" --output text') do echo Updated Task Definition: %%B
+                    aws ecs update-service --cluster %CLUSTER_NAME% --service booking-service --force-new-deployment --region %AWS_REGION%
                     '''
                 }
             }
         }
 
         // -----------------------------
-        // 8.2 Inject YouTube API Key into ECS CrowdPulse Service
+        // 9. Inject YouTube API Key into ECS CrowdPulse Service
         // -----------------------------
         stage('Inject YouTube API Key into ECS CrowdPulse Service') {
             steps {
                 withCredentials([string(credentialsId: 'youtube-api-key', variable: 'YOUTUBE_API_KEY')]) {
                     echo "🎥 Updating ECS Task Definition for CrowdPulse with YouTube API Key..."
-
                     bat '''
-                    echo Fetching current CrowdPulse task definition...
                     for /f "delims=" %%A in ('aws ecs describe-services --cluster %CLUSTER_NAME% --services crowdpulse-service --query "services[0].taskDefinition" --output text') do set TASK_DEF_ARN=%%A
-                    echo Found Task Definition: %TASK_DEF_ARN%
 
-                    echo Exporting current task definition...
                     aws ecs describe-task-definition --task-definition %TASK_DEF_ARN% --query "taskDefinition" > task_def_crowdpulse.json
-
-                    echo Injecting YouTube API Key...
                     powershell -Command "$json = Get-Content task_def_crowdpulse.json | ConvertFrom-Json; $json.containerDefinitions[0].environment += @(@{name='YOUTUBE_API_KEY'; value='%YOUTUBE_API_KEY%'}); $json | ConvertTo-Json -Depth 10 | Out-File new_task_def_crowdpulse.json -Encoding utf8"
-
-                    echo Registering new ECS task definition revision...
                     aws ecs register-task-definition --cli-input-json file://new_task_def_crowdpulse.json > register_output_crowdpulse.json
-
-                    echo Forcing ECS redeployment with updated YouTube key...
-                    for /f "delims=" %%B in ('aws ecs update-service --cluster %CLUSTER_NAME% --service crowdpulse-service --force-new-deployment --region %AWS_REGION% --query "service.taskDefinition" --output text') do echo Updated Task Definition: %%B
+                    aws ecs update-service --cluster %CLUSTER_NAME% --service crowdpulse-service --force-new-deployment --region %AWS_REGION%
                     '''
                 }
             }
         }
 
         // -----------------------------
-        // 9. Verify Frontend Upload
+        // 10. Verify Frontend Upload
         // -----------------------------
         stage('Verify Frontend Upload') {
             steps {
                 bat '''
                 echo ✅ Verifying uploaded frontend files in S3...
                 aws s3 ls s3://%S3_BUCKET_NAME%/
-                echo ♻️ Clearing CrowdPulse cache...
+                echo ♻️ Refreshing CrowdPulse widget in S3...
                 aws s3 rm s3://%S3_BUCKET_NAME%/CrowdPulse/frontend/crowdpulse_widget.html
                 aws s3 cp CrowdPulse\\frontend\\crowdpulse_widget.html s3://%S3_BUCKET_NAME%/CrowdPulse/frontend/crowdpulse_widget.html --content-type text/html
                 '''
@@ -271,7 +223,7 @@ pipeline {
         }
 
         // -----------------------------
-        // 10. Deployment Summary
+        // 11. Deployment Summary
         // -----------------------------
         stage('Deployment Summary') {
             steps {
@@ -283,7 +235,7 @@ pipeline {
         }
 
         // -----------------------------
-        // 11. Show Deployed Website URL
+        // 12. Show Deployed Website URL
         // -----------------------------
         stage('Show Deployed Website URL') {
             steps {
