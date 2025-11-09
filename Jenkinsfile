@@ -89,7 +89,21 @@ pipeline {
         }
 
         // -----------------------------
-        // 5. Update Frontend & Deploy
+        // 5. Inject YouTube API Key
+        // -----------------------------
+        stage('Inject YouTube API Key') {
+            steps {
+                withCredentials([string(credentialsId: 'youtube-api-key', variable: 'YOUTUBE_API_KEY')]) {
+                    bat '''
+                    echo Injecting YouTube API Key into build environment...
+                    setx YOUTUBE_API_KEY "%YOUTUBE_API_KEY%"
+                    '''
+                }
+            }
+        }
+
+        // -----------------------------
+        // 6. Update Frontend & Deploy
         // -----------------------------
         stage('Update Frontend URL and Deploy') {
             steps {
@@ -103,7 +117,7 @@ pipeline {
         }
 
         // -----------------------------
-        // 6. Build & Push Docker Images
+        // 7. Build & Push Docker Images
         // -----------------------------
         stage('Build & Push Docker Images') {
             steps {
@@ -112,7 +126,7 @@ pipeline {
                         'booking-service'   : 'Booking_Service',
                         'flight-service'    : 'Flight_Service',
                         'payment-service'   : 'Payment_Service',
-                        'crowdpulse-service': 'CrowdPulse\\backend'
+                        'crowdpulse-service': 'CrowdPulse/backend'
                     ]
 
                     services.each { repoName, folder ->
@@ -127,7 +141,20 @@ pipeline {
         }
 
         // -----------------------------
-        // 7. Force ECS Service Redeploy
+        // 8. Rebuild CrowdPulse (YouTube Enabled)
+        // -----------------------------
+        stage('Rebuild CrowdPulse Service (YouTube Enabled)') {
+            steps {
+                echo "🔄 Building and pushing updated CrowdPulse service with live YouTube + fallback support..."
+                bat """
+                docker build --build-arg YOUTUBE_API_KEY=%YOUTUBE_API_KEY% -t %ECR_REGISTRY%/crowdpulse-service:latest CrowdPulse/backend
+                docker push %ECR_REGISTRY%/crowdpulse-service:latest
+                """
+            }
+        }
+
+        // -----------------------------
+        // 9. Force ECS Redeployment
         // -----------------------------
         stage('Force ECS Redeployment') {
             steps {
@@ -142,7 +169,7 @@ pipeline {
         }
 
         // -----------------------------
-        // 8. Confirm Frontend Upload
+        // 10. Verify Frontend Upload
         // -----------------------------
         stage('Verify Frontend Upload') {
             steps {
@@ -154,19 +181,19 @@ pipeline {
         }
 
         // -----------------------------
-        // 9. Deployment Summary
+        // 11. Deployment Summary
         // -----------------------------
         stage('Deployment Summary') {
             steps {
                 echo "--------------------------------------"
                 echo "✅ TravelEase Deployment Complete!"
-                echo "All infrastructure, images, and databases are now up to date."
+                echo "All backend services, including CrowdPulse, are live with fallback-enabled vlogs."
                 echo "--------------------------------------"
             }
         }
 
         // -----------------------------
-        // 10. Print Deployed Website URL
+        // 12. Show Deployed Website URL
         // -----------------------------
         stage('Show Deployed Website URL') {
             steps {

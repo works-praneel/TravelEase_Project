@@ -288,10 +288,32 @@
                     <div id="paymentDetailsContainer" class="bg-white p-8 rounded-xl shadow-lg hidden">
                         <h4 class="text-2xl font-bold mb-6">Payment Details</h4>
                         <div class="space-y-6">
-                            <div><label for="cardNumber" class="block text-sm font-semibold mb-2">Card Number</label><input type="text" id="cardNumber" class="input-field" maxlength="16" required></div>
+                            <!-- Updated payment inputs: numeric-only, auto-format, expiry dropdowns, CVV=3 digits -->
+                            <div>
+                                <label for="cardNumber" class="block text-sm font-semibold mb-2">Card Number</label>
+                                <!-- display groups with spaces; underlying value will be digits only -->
+                                <input type="text" id="cardNumber" class="input-field" inputmode="numeric" maxlength="19" placeholder="1234 5678 9012 3456" autocomplete="cc-number" required>
+                                <div id="cardError" class="text-red-500 text-sm mt-1" style="display:none;"></div>
+                            </div>
+
                             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                                <div><label for="expiryDate" class="block text-sm font-semibold mb-2">Expiry (MM/YY)</label><input type="text" id="expiryDate" class="input-field" maxlength="5" required></div>
-                                <div><label for="cvv" class="block text-sm font-semibold mb-2">CVV</label><input type="text" id="cvv" class="input-field" maxlength="4" required></div>
+                                <div>
+                                    <label for="expiryMonth" class="block text-sm font-semibold mb-2">Expiry Month</label>
+                                    <select id="expiryMonth" class="input-field" required>
+                                        <option value="">MM</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label for="expiryYear" class="block text-sm font-semibold mb-2">Expiry Year</label>
+                                    <select id="expiryYear" class="input-field" required>
+                                        <option value="">YY</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label for="cvv" class="block text-sm font-semibold mb-2">CVV</label>
+                                    <input type="text" id="cvv" class="input-field" inputmode="numeric" maxlength="3" placeholder="123" autocomplete="cc-csc" required>
+                                    <div id="cvvError" class="text-red-500 text-sm mt-1" style="display:none;"></div>
+                                </div>
                             </div>
                         </div>
                         <div id="paymentStatus" class="mt-6 text-center text-lg font-semibold hidden"></div>
@@ -526,20 +548,87 @@
             document.getElementById('seatSelectionContainer').classList.remove('hidden');
             document.getElementById('paymentDetailsContainer').classList.add('hidden');
             document.getElementById('paymentStatus').classList.add('hidden');
+
+            // clear any payment field errors when we reset
+            hideFieldError('cardError');
+            hideFieldError('cvvError');
+        }
+
+        // Show/hide per-field error messages
+        function showFieldError(id, message) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.textContent = message;
+            el.style.display = 'block';
+        }
+        function hideFieldError(id) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.textContent = '';
+            el.style.display = 'none';
         }
         
         async function finalizeBooking() {
             const fullName = document.getElementById('fullName').value;
             const email = document.getElementById('email').value;
-            const cardNumber = document.getElementById('cardNumber').value;
+            const cardNumberEl = document.getElementById('cardNumber');
+            const cvvEl = document.getElementById('cvv');
+            const expiryMonth = document.getElementById('expiryMonth').value;
+            const expiryYear = document.getElementById('expiryYear').value;
             const finalizeBtn = document.getElementById('finalizeBookingBtn');
             
-            if (!fullName || !email || !cardNumber || cardNumber.length < 16) { 
-                showMessage('Please fill all passenger and valid payment details.', 'error'); 
+            // clear field errors
+            hideFieldError('cardError');
+            hideFieldError('cvvError');
+
+            // sanitize card digits (remove spaces)
+            const cardDigits = cardNumberEl.value.replace(/\s+/g, '');
+
+            // Validation rules per your request:
+            // 1) No alphabets -> enforced by input sanitization
+            // 2) Card Number: automatic spacing after 4 digits and max 16 digits excluding spaces
+            // 3) Expiry: dropdown of MM/YY (we require both selected)
+            // 4) CVV: only 3 digits and no more
+            if (!fullName || !email) { 
+                showMessage('Please fill passenger details.', 'error'); 
                 return; 
             }
+
             if (!selectedSeat) {
                 showMessage('Please go back and select a seat.', 'error');
+                return;
+            }
+
+            // Validate card number length and digits
+            if (!/^\d{16}$/.test(cardDigits)) {
+                showFieldError('cardError', 'Card number must be 16 digits. Letters are not allowed.');
+                showMessage('Please provide a valid 16-digit card number.', 'error');
+                return;
+            }
+
+            // Validate expiry
+            if (!expiryMonth || !expiryYear) {
+                showMessage('Please select a valid expiry month and year.', 'error');
+                return;
+            }
+            // Optionally, validate expiry not in past
+            const yearFull = parseInt('20' + expiryYear, 10);
+            const monthNum = parseInt(expiryMonth, 10);
+            const now = new Date();
+            const expiryDate = new Date(yearFull, monthNum - 1, 1);
+            // set to last day of month for safer comparison
+            expiryDate.setMonth(expiryDate.getMonth() + 1);
+            expiryDate.setDate(0);
+            if (expiryDate < now) {
+                showMessage('Card expiry date is in the past. Provide a valid card.', 'error');
+                return;
+            }
+
+            // Validate CVV 3 digits
+            const cvv = cvvEl.value.replace(/\D/g, '');
+            if (!/^\d{3}$/.test(cvv)) {
+                showFieldError('cvvError', 'CVV must be exactly 3 digits.');
+                showMessage('Please provide a valid 3-digit CVV.', 'error');
                 return;
             }
             
@@ -548,7 +637,11 @@
             
             const paymentData = { 
                 amount: totalPrice, 
-                card_number: cardNumber, 
+                card_number: cardDigits, 
+                // Do not include CVV in logs or UI. Many processors require it only in the immediate transaction.
+                // We will include expiry fields for the payment processor.
+                expiry_month: expiryMonth,
+                expiry_year: expiryYear,
                 email: email,
                 flight_id: flightId,
                 flight_details: `${selectedDepartureFlight.name} (${selectedDepartureFlight.route})`,
@@ -952,6 +1045,75 @@
             });
             
              document.getElementById('departureDate').min = new Date().toISOString().split('T')[0];
+
+            // --- Payment input helpers and init ---
+
+            // Populate expiry selects (MM and YY)
+            const expiryMonthEl = document.getElementById('expiryMonth');
+            const expiryYearEl = document.getElementById('expiryYear');
+            if (expiryMonthEl && expiryYearEl) {
+                // months
+                for (let m = 1; m <= 12; m++) {
+                    const mm = (m < 10 ? '0' : '') + m;
+                    const opt = document.createElement('option');
+                    opt.value = mm;
+                    opt.textContent = mm;
+                    expiryMonthEl.appendChild(opt);
+                }
+                // years - show current year to +10
+                const now = new Date();
+                const thisYear = now.getFullYear();
+                const yyStart = parseInt(String(thisYear).slice(-2), 10);
+                for (let offset = 0; offset <= 10; offset++) {
+                    const y = thisYear + offset;
+                    const opt = document.createElement('option');
+                    opt.value = String(y).slice(-2);
+                    opt.textContent = String(y).slice(-2);
+                    expiryYearEl.appendChild(opt);
+                }
+            }
+
+            // Card number formatting and alphabet blocking
+            const cardNumberInput = document.getElementById('cardNumber');
+            if (cardNumberInput) {
+                cardNumberInput.addEventListener('input', (e) => {
+                    // remove non-digits
+                    let digits = e.target.value.replace(/\D/g, '');
+                    // limit to 16 digits
+                    if (digits.length > 16) digits = digits.slice(0,16);
+                    // insert spaces every 4 digits
+                    const parts = [];
+                    for (let i = 0; i < digits.length; i += 4) parts.push(digits.substring(i, i+4));
+                    e.target.value = parts.join(' ');
+                    // hide card error while typing
+                    hideFieldError('cardError');
+                });
+                // Prevent paste with letters; sanitize on paste
+                cardNumberInput.addEventListener('paste', (ev) => {
+                    ev.preventDefault();
+                    const text = (ev.clipboardData || window.clipboardData).getData('text') || '';
+                    const digits = text.replace(/\D/g, '').slice(0,16);
+                    const parts = [];
+                    for (let i = 0; i < digits.length; i += 4) parts.push(digits.substring(i, i+4));
+                    cardNumberInput.value = parts.join(' ');
+                    hideFieldError('cardError');
+                });
+            }
+
+            // CVV numeric-only and max 3
+            const cvvInput = document.getElementById('cvv');
+            if (cvvInput) {
+                cvvInput.addEventListener('input', (e) => {
+                    e.target.value = e.target.value.replace(/\D/g, '').slice(0,3);
+                    hideFieldError('cvvError');
+                });
+                cvvInput.addEventListener('paste', (ev) => {
+                    ev.preventDefault();
+                    const text = (ev.clipboardData || window.clipboardData).getData('text') || '';
+                    cvvInput.value = text.replace(/\D/g, '').slice(0,3);
+                    hideFieldError('cvvError');
+                });
+            }
         });
     </script>
 </body>

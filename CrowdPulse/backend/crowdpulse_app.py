@@ -3,19 +3,18 @@ from flask_cors import CORS
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from googleapiclient.discovery import build
 from dotenv import load_dotenv
-import os, time, random, logging
+import os, time, random, logging, json
 
 # ------------------------
 # CONFIGURATION
 # ------------------------
 load_dotenv()
-app = Flask(__name__)  # ✅ Fixed: should be __name, not _name
+app = Flask(__name__)
 CORS(app)
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(message)s')
 
-# --- YOUTUBE API KEY ---
-YOUTUBE_API_KEY = "AIzaSyC4FAL-z4kSa-dzPHN52RiN57lYOaUCXpE"
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "AIzaSyC4FAL-z4kSa-dzPHN52RiN57lYOaUCXpE")
 
 try:
     youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
@@ -25,98 +24,110 @@ except Exception as e:
 
 analyzer = SentimentIntensityAnalyzer()
 
-# --- CITY MAP ---
 CITY_MAP = {
-    "DEL": "Delhi",
-    "BOM": "Mumbai",
-    "CCU": "Kolkata",
-    "MAA": "Chennai",
-    "GOI": "Goa",
-    "HYD": "Hyderabad",
-    "HKT": "Phuket",
-    "SUB": "Juanda",
-    "NRT": "Narita",
-    "HND": "Haneda",
-    "DXB": "Dubai",
-    "SYD": "Sydney",
-    "MEL": "Melbourne",
-    "AKL": "Auckland",
-    "LHR": "London",
-    "NYC": "New York",
-    "LAX": "Los Angeles",
-    "CDG": "Paris",
-    "TOK": "Tokyo"
+    "DEL": "Delhi", "BOM": "Mumbai", "CCU": "Kolkata", "MAA": "Chennai", "GOI": "Goa",
+    "HYD": "Hyderabad", "HKT": "Phuket", "SUB": "Juanda", "NRT": "Narita", "HND": "Haneda",
+    "DXB": "Dubai", "SYD": "Sydney", "MEL": "Melbourne", "AKL": "Auckland",
+    "LHR": "London", "NYC": "New York", "LAX": "Los Angeles", "CDG": "Paris", "TOK": "Tokyo"
 }
 
 CACHE = {}
-TTL = 600  # 10 minutes
+TTL = 900  # 15 minutes
+
+# Static fallback data (minimal but attractive)
+STATIC_VLOGS = {
+    "GOA": [
+        {"title": "Exploring Goa 2024 | Best Beaches & Food", "url": "https://www.youtube.com/watch?v=PfAoO4RVmV0",
+         "thumbnail": "https://i.ytimg.com/vi/PfAoO4RVmV0/hqdefault.jpg"},
+        {"title": "Goa Nightlife & Beaches | Complete Vlog", "url": "https://www.youtube.com/watch?v=gw2YV2vR3NI",
+         "thumbnail": "https://i.ytimg.com/vi/gw2YV2vR3NI/hqdefault.jpg"},
+    ],
+    "DXB": [
+        {"title": "Dubai in 48 Hours | Desert Safari & Skyline", "url": "https://www.youtube.com/watch?v=R4R6nUgZngE",
+         "thumbnail": "https://i.ytimg.com/vi/R4R6nUgZngE/hqdefault.jpg"},
+        {"title": "Dubai Travel Guide 2024", "url": "https://www.youtube.com/watch?v=FHTaBCgZghM",
+         "thumbnail": "https://i.ytimg.com/vi/FHTaBCgZghM/hqdefault.jpg"}
+    ]
+}
 
 # ------------------------
 # UTILITY FUNCTIONS
 # ------------------------
 
-def get_youtube_comments(city_name: str):
-    """Fetch recent comments about a city from YouTube travel vlogs"""
-    comments = []
-    if not youtube:
-        logging.warning("YouTube client not initialized. Skipping video search.")
-        return comments
-    try:
-        req = youtube.search().list(
-            q=f"{city_name} travel vlog tourism experience",
-            part="snippet",
-            maxResults=3,
-            type="video",
-            order="date"
-        )
-        res = req.execute()
-        for vid in res.get("items", []):
-            vid_id = vid["id"]["videoId"]
-            comm_req = youtube.commentThreads().list(
-                part="snippet",
-                videoId=vid_id,
-                maxResults=10,
-                textFormat="plainText"
-            )
-            comm_res = comm_req.execute()
-            for c in comm_res.get("items", []):
-                text = c["snippet"]["topLevelComment"]["snippet"]["textDisplay"]
-                comments.append(text)
-    except Exception as e:
-        logging.warning(f"[YouTube API Error for {city_name}] {e}")
-    return comments
-
-
 def get_social_posts(city_name: str):
-    """Mock data for social posts"""
-    sentiments = []
-    for _ in range(random.randint(5, 15)):
-        adj = random.choice(["amazing", "terrible", "okay", "crowded", "beautiful", "disappointing"])
-        text = f"Just visited {city_name}, it was {adj}!"
+    """Generate pseudo-random social media sentiment posts."""
+    posts = []
+    for _ in range(random.randint(6, 12)):
+        adj = random.choice(["amazing", "terrible", "beautiful", "crowded", "peaceful", "exciting"])
+        text = f"My experience in {city_name} was {adj}!"
         score = analyzer.polarity_scores(text)["compound"]
         sentiment = "neutral"
         if score >= 0.05:
             sentiment = "positive"
         elif score <= -0.05:
             sentiment = "negative"
-        sentiments.append({
+        posts.append({
             "text": text,
             "source": random.choice(["Twitter", "Reddit"]),
             "sentiment": sentiment
         })
-    return sentiments
+    return posts
 
 
 def get_youtube_videos(city_name: str):
-    """Mock data for YouTube videos"""
+    """
+    Fetch actual YouTube vlog data for the given city.
+    Falls back to static samples or placeholders if API quota is exceeded.
+    """
+    code = next((k for k, v in CITY_MAP.items() if v.lower() == city_name.lower()), None)
     videos = []
-    for i in range(random.randint(2, 4)):
-        videos.append({
-            "title": f"My Awesome Trip to {city_name}! (Vlog #{i+1})",
+
+    # First, return static known vlogs if available
+    if code and code in STATIC_VLOGS:
+        return STATIC_VLOGS[code]
+
+    # If YouTube API unavailable
+    if not youtube:
+        logging.warning("YouTube client unavailable. Using static fallback.")
+        return STATIC_VLOGS.get(code, [{
+            "title": f"Top sights in {city_name}",
             "url": "https://www.youtube.com",
             "thumbnail": "https://placehold.co/200x120/6c2bd9/white?text=Vlog"
-        })
+        }])
+
+    try:
+        search_query = f"{city_name} travel vlog 2024 tourism"
+        req = youtube.search().list(
+            q=search_query,
+            part="snippet",
+            type="video",
+            order="viewCount",
+            maxResults=5
+        )
+        res = req.execute()
+
+        for item in res.get("items", []):
+            video_id = item["id"]["videoId"]
+            snippet = item["snippet"]
+            videos.append({
+                "title": snippet["title"],
+                "url": f"https://www.youtube.com/watch?v={video_id}",
+                "thumbnail": snippet["thumbnails"]["high"]["url"]
+            })
+
+        # If API returned nothing, fallback to static
+        if not videos:
+            raise ValueError("Empty response")
+
+    except Exception as e:
+        logging.warning(f"[YouTube API Fallback for {city_name}] {e}")
+        videos = STATIC_VLOGS.get(code, [{
+            "title": f"Explore {city_name} | Travel Highlights",
+            "url": "https://www.youtube.com",
+            "thumbnail": "https://placehold.co/200x120/6c2bd9/white?text=Vlog"
+        }])
     return videos
+
 
 # ------------------------
 # ROUTES
@@ -128,18 +139,18 @@ def home():
 
 @app.route("/ping")
 def ping():
-    """Simple health check for ALB"""
     return "pong", 200
 
 @app.route("/api/crowdpulse/health")
 def health_check():
-    """Health check for ALB"""
     return "OK", 200
 
 @app.route("/api/crowdpulse/<string:city_code>")
 def get_city_pulse(city_code):
-    now = time.time()
     city_code = city_code.upper()
+    now = time.time()
+
+    # Cached
     cached = CACHE.get(city_code)
     if cached and now - cached["timestamp"] < TTL:
         logging.info(f"Returning cached data for {city_code}")
@@ -149,6 +160,7 @@ def get_city_pulse(city_code):
     if not city_name:
         abort(404, description="City code not found")
 
+    logging.info(f"Fetching live data for {city_name}")
     social_posts = get_social_posts(city_name)
     youtube_videos = get_youtube_videos(city_name)
 
@@ -163,8 +175,9 @@ def get_city_pulse(city_code):
     CACHE[city_code] = {"data": data, "timestamp": now}
     return jsonify(data)
 
+
 # ------------------------
 # ENTRY POINT
 # ------------------------
-if __name__ == "__main__":  # ✅ Fixed
+if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5010, debug=False)

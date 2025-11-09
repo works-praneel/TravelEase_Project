@@ -57,9 +57,7 @@
             box-shadow: 0 2px 4px rgba(0,0,0,0.05);
             transition: box-shadow 0.2s ease;
         }
-        .cp-post-card:hover {
-            box-shadow: 0 4px 8px rgba(0,0,0,0.08);
-        }
+        .cp-post-card:hover { box-shadow: 0 4px 8px rgba(0,0,0,0.08); }
         .cp-post-card p {
             margin: 0;
             font-size: 0.95rem;
@@ -84,7 +82,9 @@
             overflow: hidden;
             border: 1px solid #eee;
             box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            transition: transform 0.2s;
         }
+        .cp-video-card:hover { transform: scale(1.03); }
         .cp-video-card img {
             width: 100%;
             height: 120px;
@@ -114,17 +114,94 @@
         <div id="cp-widget-content" style="display: none;">
             <div id="cp-social-pulse">
                 <h3><span id="cp-social-icon">💬</span> What People Are Saying...</h3>
-                <div id="cp-social-posts-container">
-                    </div>
+                <div id="cp-social-posts-container"></div>
             </div>
 
             <div id="cp-video-pulse">
                 <h3><span id="cp-video-icon">▶️</span> Top Travel Vlogs...</h3>
-                <div id="cp-video-list-container" class="cp-video-list">
-                    </div>
+                <div id="cp-video-list-container" class="cp-video-list"></div>
             </div>
         </div>
     </div>
 
-    </body>
+    <script>
+      // Auto-register live initCrowdPulse if not already provided by index.html
+      if (typeof window.initCrowdPulse === 'undefined') {
+        window.initCrowdPulse = async (container, getApiUrl, destination_code) => {
+          const API_ENDPOINT = "http://travelease-project-ALB-720876672.eu-north-1.elb.amazonaws.com";
+          const titleEl = container.querySelector('#cp-widget-title');
+          const loaderEl = container.querySelector('#cp-widget-loader');
+          const errorEl = container.querySelector('#cp-widget-error');
+          const contentEl = container.querySelector('#cp-widget-content');
+          const postsEl = container.querySelector('#cp-social-posts-container');
+          const videosEl = container.querySelector('#cp-video-list-container');
+
+          // Helper: show/hide
+          const show = el => el.style.display = 'block';
+          const hide = el => el.style.display = 'none';
+
+          function showError(msg) {
+            hide(loaderEl);
+            hide(contentEl);
+            errorEl.textContent = msg;
+            show(errorEl);
+          }
+
+          try {
+            hide(errorEl);
+            show(loaderEl);
+            hide(contentEl);
+            titleEl.textContent = `CrowdPulse Insights for ${destination_code}`;
+
+            const apiUrl = typeof getApiUrl === 'function'
+              ? getApiUrl(`/api/crowdpulse/${destination_code}`, 5010)
+              : `${API_ENDPOINT}/api/crowdpulse/${destination_code}`;
+
+            const res = await fetch(apiUrl);
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.message || 'Failed to load CrowdPulse data.');
+
+            // Render social posts
+            postsEl.innerHTML = '';
+            if (data.social_media_posts?.length) {
+              data.social_media_posts.forEach(p => {
+                const div = document.createElement('div');
+                div.className = 'cp-post-card';
+                div.innerHTML = `
+                  <p>"${p.text}"</p>
+                  <div class="cp-post-source">${p.source} • ${p.sentiment}</div>
+                `;
+                postsEl.appendChild(div);
+              });
+            } else {
+              postsEl.innerHTML = '<p>No recent traveler posts available.</p>';
+            }
+
+            // Render videos
+            videosEl.innerHTML = '';
+            if (data.youtube_videos?.length) {
+              data.youtube_videos.forEach(v => {
+                const div = document.createElement('div');
+                div.className = 'cp-video-card';
+                div.innerHTML = `
+                  <a href="${v.url}" target="_blank" rel="noopener noreferrer">
+                    <img src="${v.thumbnail}" alt="Vlog Thumbnail">
+                    <div class="cp-video-title">${v.title}</div>
+                  </a>
+                `;
+                videosEl.appendChild(div);
+              });
+            } else {
+              videosEl.innerHTML = '<p>No travel vlogs found for this city.</p>';
+            }
+
+            hide(loaderEl);
+            show(contentEl);
+          } catch (err) {
+            showError(err.message);
+          }
+        };
+      }
+    </script>
+</body>
 </html>
