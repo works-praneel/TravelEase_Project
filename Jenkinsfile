@@ -117,7 +117,7 @@ pipeline {
         }
 
         // -----------------------------
-        // 7. Build & Push Docker Images
+        // 7. Build & Push Docker Images (with Gmail + YouTube keys)
         // -----------------------------
         stage('Build & Push Docker Images') {
             steps {
@@ -133,9 +133,13 @@ pipeline {
                         echo "Building and pushing image for ${repoName}..."
 
                         if (repoName == 'booking-service') {
-                            // Inject Gmail credentials into Booking Service
+                            // Gmail credentials for Booking Service
                             withCredentials([
-                                usernamePassword(credentialsId: 'gmail-user', usernameVariable: 'EMAIL_USER', passwordVariable: 'EMAIL_PASS')
+                                usernamePassword(
+                                    credentialsId: 'gmail-user',
+                                    usernameVariable: 'EMAIL_USER',
+                                    passwordVariable: 'EMAIL_PASS'
+                                )
                             ]) {
                                 bat """
                                 echo Building Booking Service with Gmail credentials...
@@ -146,7 +150,22 @@ pipeline {
                                 docker push %ECR_REGISTRY%/${repoName}:latest
                                 """
                             }
-                        } else {
+                        }
+
+                        else if (repoName == 'crowdpulse-service') {
+                            // YouTube API Key for live vlog support
+                            withCredentials([string(credentialsId: 'youtube-api-key', variable: 'YOUTUBE_API_KEY')]) {
+                                bat """
+                                echo Building CrowdPulse service with live YouTube integration...
+                                docker build ^
+                                    --build-arg YOUTUBE_API_KEY=%YOUTUBE_API_KEY% ^
+                                    -t %ECR_REGISTRY%/${repoName}:latest ${folder}
+                                docker push %ECR_REGISTRY%/${repoName}:latest
+                                """
+                            }
+                        }
+
+                        else {
                             bat """
                             docker build -t %ECR_REGISTRY%/${repoName}:latest ${folder}
                             docker push %ECR_REGISTRY%/${repoName}:latest
@@ -158,20 +177,7 @@ pipeline {
         }
 
         // -----------------------------
-        // 8. Rebuild CrowdPulse (YouTube Enabled)
-        // -----------------------------
-        stage('Rebuild CrowdPulse Service (YouTube Enabled)') {
-            steps {
-                echo "🔄 Building and pushing updated CrowdPulse service with live YouTube + fallback support..."
-                bat """
-                docker build --build-arg YOUTUBE_API_KEY=%YOUTUBE_API_KEY% -t %ECR_REGISTRY%/crowdpulse-service:latest CrowdPulse/backend
-                docker push %ECR_REGISTRY%/crowdpulse-service:latest
-                """
-            }
-        }
-
-        // -----------------------------
-        // 9. Force ECS Redeployment
+        // 8. Force ECS Redeployment
         // -----------------------------
         stage('Force ECS Redeployment') {
             steps {
@@ -186,31 +192,98 @@ pipeline {
         }
 
         // -----------------------------
-        // 10. Verify Frontend Upload
+        // 8.1 Inject Gmail Credentials into ECS Booking Service
+        // -----------------------------
+        stage('Inject Gmail Credentials into ECS Booking Service') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'gmail-user',
+                        usernameVariable: 'EMAIL_USER',
+                        passwordVariable: 'EMAIL_PASS'
+                    )
+                ]) {
+                    echo "🔐 Updating ECS Task Definition for Booking Service with Gmail credentials..."
+
+                    bat '''
+                    echo Fetching current Booking Service task definition...
+                    for /f "delims=" %%A in ('aws ecs describe-services --cluster %CLUSTER_NAME% --services booking-service --query "services[0].taskDefinition" --output text') do set TASK_DEF_ARN=%%A
+                    echo Found Task Definition: %TASK_DEF_ARN%
+
+                    echo Exporting current task definition...
+                    aws ecs describe-task-definition --task-definition %TASK_DEF_ARN% --query "taskDefinition" > task_def.json
+
+                    echo Injecting Gmail credentials...
+                    powershell -Command "$json = Get-Content task_def.json | ConvertFrom-Json; $json.containerDefinitions[0].environment += @(@{name='EMAIL_USER'; value='%EMAIL_USER%'}, @{name='EMAIL_PASS'; value='%EMAIL_PASS%'}); $json | ConvertTo-Json -Depth 10 | Out-File new_task_def.json -Encoding utf8"
+
+                    echo Registering new ECS task definition revision...
+                    aws ecs register-task-definition --cli-input-json file://new_task_def.json > register_output.json
+
+                    echo Forcing ECS redeployment with updated credentials...
+                    for /f "delims=" %%B in ('aws ecs update-service --cluster %CLUSTER_NAME% --service booking-service --force-new-deployment --region %AWS_REGION% --query "service.taskDefinition" --output text') do echo Updated Task Definition: %%B
+                    '''
+                }
+            }
+        }
+
+        // -----------------------------
+        // 8.2 Inject YouTube API Key into ECS CrowdPulse Service
+        // -----------------------------
+        stage('Inject YouTube API Key into ECS CrowdPulse Service') {
+            steps {
+                withCredentials([string(credentialsId: 'youtube-api-key', variable: 'YOUTUBE_API_KEY')]) {
+                    echo "🎥 Updating ECS Task Definition for CrowdPulse with YouTube API Key..."
+
+                    bat '''
+                    echo Fetching current CrowdPulse task definition...
+                    for /f "delims=" %%A in ('aws ecs describe-services --cluster %CLUSTER_NAME% --services crowdpulse-service --query "services[0].taskDefinition" --output text') do set TASK_DEF_ARN=%%A
+                    echo Found Task Definition: %TASK_DEF_ARN%
+
+                    echo Exporting current task definition...
+                    aws ecs describe-task-definition --task-definition %TASK_DEF_ARN% --query "taskDefinition" > task_def_crowdpulse.json
+
+                    echo Injecting YouTube API Key...
+                    powershell -Command "$json = Get-Content task_def_crowdpulse.json | ConvertFrom-Json; $json.containerDefinitions[0].environment += @(@{name='YOUTUBE_API_KEY'; value='%YOUTUBE_API_KEY%'}); $json | ConvertTo-Json -Depth 10 | Out-File new_task_def_crowdpulse.json -Encoding utf8"
+
+                    echo Registering new ECS task definition revision...
+                    aws ecs register-task-definition --cli-input-json file://new_task_def_crowdpulse.json > register_output_crowdpulse.json
+
+                    echo Forcing ECS redeployment with updated YouTube key...
+                    for /f "delims=" %%B in ('aws ecs update-service --cluster %CLUSTER_NAME% --service crowdpulse-service --force-new-deployment --region %AWS_REGION% --query "service.taskDefinition" --output text') do echo Updated Task Definition: %%B
+                    '''
+                }
+            }
+        }
+
+        // -----------------------------
+        // 9. Verify Frontend Upload
         // -----------------------------
         stage('Verify Frontend Upload') {
             steps {
                 bat '''
                 echo ✅ Verifying uploaded frontend files in S3...
                 aws s3 ls s3://%S3_BUCKET_NAME%/
+                echo ♻️ Clearing CrowdPulse cache...
+                aws s3 rm s3://%S3_BUCKET_NAME%/CrowdPulse/frontend/crowdpulse_widget.html
+                aws s3 cp CrowdPulse\\frontend\\crowdpulse_widget.html s3://%S3_BUCKET_NAME%/CrowdPulse/frontend/crowdpulse_widget.html --content-type text/html
                 '''
             }
         }
 
         // -----------------------------
-        // 11. Deployment Summary
+        // 10. Deployment Summary
         // -----------------------------
         stage('Deployment Summary') {
             steps {
                 echo "--------------------------------------"
                 echo "✅ TravelEase Deployment Complete!"
-                echo "All backend services, including Booking Email + CrowdPulse, are live and configured."
+                echo "All backend services (Booking Email + CrowdPulse YouTube) are live and configured."
                 echo "--------------------------------------"
             }
         }
 
         // -----------------------------
-        // 12. Show Deployed Website URL
+        // 11. Show Deployed Website URL
         // -----------------------------
         stage('Show Deployed Website URL') {
             steps {

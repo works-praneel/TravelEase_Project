@@ -43,7 +43,10 @@ def ping():
 def payment():
     """
     Mock payment processor for the TravelEase app.
-    Approves card numbers starting with '4242' for testing.
+    Validates card details strictly:
+      - No alphabets allowed
+      - Card must be 16 digits (spaces allowed in input)
+    Accepts any valid 16-digit numeric card.
     """
     try:
         data = request.get_json()
@@ -51,34 +54,36 @@ def payment():
             return jsonify({"message": "No input data provided"}), 400
 
         # Extract fields from frontend
-        card_number = data.get('card_number', '')
+        card_number = data.get('card_number', '').strip()
         amount = Decimal(str(data.get('amount', 0)))
         flight_id = data.get('flight_id')
         flight_details = data.get('flight_details')
         seat_number = data.get('seat_number')
         user_email = data.get('email')
 
-        # Validate all essential fields
-        if not all([flight_id, flight_details, seat_number, user_email, amount > 0, len(card_number) >= 16]):
-            return jsonify({"message": "Payment failed: Invalid or missing data from frontend."}), 400
+        # Validate required fields
+        if not all([flight_id, flight_details, seat_number, user_email, amount > 0]):
+            return jsonify({"message": "Payment failed: Missing or invalid data from frontend."}), 400
 
+        # Normalize and validate card number
+        card_number_clean = card_number.replace(" ", "")
+        if any(ch.isalpha() for ch in card_number_clean):
+            return jsonify({"message": "Invalid card number. Alphabets are not allowed."}), 400
+        if not card_number_clean.isdigit() or len(card_number_clean) != 16:
+            return jsonify({"message": "Invalid card number. Must be exactly 16 digits."}), 400
+
+        # All checks passed — approve payment
         transaction_id = f"TXN-{str(uuid.uuid4())[:8].upper()}"
 
-        # Mock approval logic
-        if card_number.startswith("4242"):
-            return jsonify({
-                "message": "Payment Successful",
-                "transaction_id": transaction_id,
-                "flight_id": flight_id,
-                "flight_details": flight_details,
-                "seat_number": seat_number,
-                "user_email": user_email,
-                "amount_paid": amount
-            }), 200
-        else:
-            return jsonify({
-                "message": "Payment Failed. Your bank declined the transaction."
-            }), 402
+        return jsonify({
+            "message": "Payment Successful",
+            "transaction_id": transaction_id,
+            "flight_id": flight_id,
+            "flight_details": flight_details,
+            "seat_number": seat_number,
+            "user_email": user_email,
+            "amount_paid": amount
+        }), 200
 
     except Exception as e:
         print(f"Error in /api/payment: {e}")
@@ -86,6 +91,7 @@ def payment():
             "message": "Payment failed due to an internal error.",
             "error": str(e)
         }), 500
+
 
 
 if __name__ == "__main__":
