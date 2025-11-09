@@ -74,7 +74,7 @@ def update_urls_in_index(file_path, new_url):
 
 
 def deploy_to_s3(bucket_name):
-    """Upload frontend files to S3 with correct content types."""
+    """Upload frontend files to S3 (compatible with ACLs disabled)."""
     print(f"\n[DEPLOY] Uploading frontend to s3://{bucket_name}/")
 
     files_to_upload = {
@@ -91,7 +91,7 @@ def deploy_to_s3(bucket_name):
         s3_key = local_path.replace("\\", "/")  # normalize path for S3
         cmd = (
             f'aws s3 cp "{local_path}" "s3://{bucket_name}/{s3_key}" '
-            f'--content-type {content_type} --acl public-read'
+            f'--content-type {content_type}'
         )
         run_command(cmd)
 
