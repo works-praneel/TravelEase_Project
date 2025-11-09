@@ -126,15 +126,32 @@ pipeline {
                         'booking-service'   : 'Booking_Service',
                         'flight-service'    : 'Flight_Service',
                         'payment-service'   : 'Payment_Service',
-                        'crowdpulse-service': 'CrowdPulse/backend'
+                        'crowdpulse-service': 'CrowdPulse\\backend'
                     ]
 
                     services.each { repoName, folder ->
                         echo "Building and pushing image for ${repoName}..."
-                        bat """
-                        docker build -t %ECR_REGISTRY%/${repoName}:latest ${folder}
-                        docker push %ECR_REGISTRY%/${repoName}:latest
-                        """
+
+                        if (repoName == 'booking-service') {
+                            // Inject Gmail credentials into Booking Service
+                            withCredentials([
+                                usernamePassword(credentialsId: 'gmail-user', usernameVariable: 'EMAIL_USER', passwordVariable: 'EMAIL_PASS')
+                            ]) {
+                                bat """
+                                echo Building Booking Service with Gmail credentials...
+                                docker build ^
+                                    --build-arg EMAIL_USER=%EMAIL_USER% ^
+                                    --build-arg EMAIL_PASS=%EMAIL_PASS% ^
+                                    -t %ECR_REGISTRY%/${repoName}:latest ${folder}
+                                docker push %ECR_REGISTRY%/${repoName}:latest
+                                """
+                            }
+                        } else {
+                            bat """
+                            docker build -t %ECR_REGISTRY%/${repoName}:latest ${folder}
+                            docker push %ECR_REGISTRY%/${repoName}:latest
+                            """
+                        }
                     }
                 }
             }
@@ -187,7 +204,7 @@ pipeline {
             steps {
                 echo "--------------------------------------"
                 echo "✅ TravelEase Deployment Complete!"
-                echo "All backend services, including CrowdPulse, are live with fallback-enabled vlogs."
+                echo "All backend services, including Booking Email + CrowdPulse, are live and configured."
                 echo "--------------------------------------"
             }
         }

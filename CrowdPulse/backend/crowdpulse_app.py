@@ -14,10 +14,17 @@ CORS(app)
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(message)s')
 
-YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "AIzaSyC4FAL-z4kSa-dzPHN52RiN57lYOaUCXpE")
+# --- YOUTUBE API KEY ---
+# Removed hardcoded fallback key — will use environment variable set via Jenkins and Docker build arg
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "").strip()
+
+if not YOUTUBE_API_KEY:
+    logging.warning("⚠️ No YouTube API key found in environment; CrowdPulse will use fallback data.")
 
 try:
-    youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
+    youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY) if YOUTUBE_API_KEY else None
+    if youtube:
+        logging.info("✅ YouTube API client initialized successfully (live data enabled).")
 except Exception as e:
     youtube = None
     logging.error(f"Failed to initialize YouTube client: {e}")
