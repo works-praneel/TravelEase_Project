@@ -19,5 +19,5 @@ output "frontend_bucket_name" {
 # -----------------------------
 output "frontend_website_url" {
   description = "Public website endpoint for the frontend"
-  value       = aws_s3_bucket.frontend_bucket.website_endpoint
+  value       = aws_s3_bucket_website_configuration.frontend_site.website_endpoint
 }
