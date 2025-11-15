@@ -161,7 +161,70 @@ pipeline {
 
         // -----------------------------
 
-// 8. Inject Gmail Credentials into ECS Booking Service
+// stage('Inject Gmail Credentials into ECS Booking Service') {
+    steps {
+        withCredentials([
+            usernamePassword(
+                credentialsId: 'gmail-user',
+                usernameVariable: 'USR',
+                passwordVariable: 'PWD'
+            )
+        ]) {
+
+            // Create a temporary PowerShell script file
+            writeFile file: 'update_creds.ps1', text: '''
+$json = Get-Content "task_def.json" | ConvertFrom-Json
+
+# Remove old creds
+$filtered = @()
+foreach ($env in $json.containerDefinitions[0].environment) {
+    if ($env.name -ne "EMAIL_USER" -and $env.name -ne "EMAIL_PASS") {
+        $filtered += $env
+    }
+}
+$json.containerDefinitions[0].environment = $filtered
+
+# Add new ones (provided at runtime)
+$json.containerDefinitions[0].environment += @{ name="EMAIL_USER"; value=$env:USR }
+$json.containerDefinitions[0].environment += @{ name="EMAIL_PASS"; value=$env:PWD }
+
+$json | ConvertTo-Json -Depth 20 | Out-File "new_task_def.json" -Encoding UTF8
+'''
+
+            bat """
+                echo Fetching current task definition...
+
+                for /f "delims=" %%A in ('aws ecs describe-services ^
+                    --cluster %CLUSTER_NAME% ^
+                    --services booking-service ^
+                    --query "services[0].taskDefinition" ^
+                    --output text') do set TASK_DEF_ARN=%%A
+
+                aws ecs describe-task-definition ^
+                    --task-definition %TASK_DEF_ARN% ^
+                    --query "taskDefinition" > task_def.json
+
+                rem --- Run PowerShell script safely ---
+                powershell -ExecutionPolicy Bypass -File update_creds.ps1
+
+                aws ecs register-task-definition ^
+                    --cli-input-json file://new_task_def.json ^
+                    --region %AWS_REGION% > register_output.json
+
+                for /f "delims=" %%B in ('powershell -Command ^
+                    "(Get-Content register_output.json | ConvertFrom-Json).taskDefinition.taskDefinitionArn"') do set NEW_TASK_DEF=%%B
+
+                aws ecs update-service ^
+                    --cluster %CLUSTER_NAME% ^
+                    --service booking-service ^
+                    --task-definition %NEW_TASK_DEF% ^
+                    --force-new-deployment ^
+                    --region %AWS_REGION%
+            """
+        }
+    }
+}
+
 stage('Inject Gmail Credentials into ECS Booking Service') {
     steps {
         withCredentials([
@@ -221,6 +284,8 @@ stage('Inject Gmail Credentials into ECS Booking Service') {
         }
     }
 }
+
+
 
         // -----------------------------
         // 9. Inject YouTube API Key into ECS CrowdPulse Service
