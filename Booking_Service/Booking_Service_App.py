@@ -68,7 +68,6 @@ def book_flight():
         logging.error(f"Booking error: {e}")
         return jsonify({"message": "Booking failed", "error": str(e)}), 500
 
-
 @app.route("/cancel", methods=["POST"])
 def cancel_booking():
     """
@@ -76,10 +75,10 @@ def cancel_booking():
       {
         "booking_reference": "BK-xxxxxx",
         "user_email": "user@example.com",
-        "flight": "Flight name or details",
-        "price": 1234.0
+        "flight": "Flight name or details",   # optional
+        "price": 1234.0                       # optional
       }
-    This endpoint will process cancellation (stateless here) and send cancellation email.
+    This endpoint will process cancellation (stateless) and send a cancellation email.
     """
     try:
         data = request.get_json()
@@ -89,14 +88,15 @@ def cancel_booking():
         booking_reference = data.get("booking_reference")
         user_email = data.get("user_email")
         flight = data.get("flight", "")
-        price = data.get("price")
+        price = data.get("price")   # now optional
 
-        if not booking_reference or not user_email or price is None:
+        # Only two fields required
+        if not booking_reference or not user_email:
             return jsonify({"message": "Missing required cancellation fields"}), 400
 
-        # simple refund calc: 55% (as earlier)
+        # Refund calculation (0 if price is not provided)
         try:
-            refund_amount = round(float(price) * 0.55, 2)
+            refund_amount = round(float(price) * 0.55, 2) if price is not None else 0.0
         except Exception:
             refund_amount = 0.0
 
@@ -106,7 +106,7 @@ def cancel_booking():
             "price": price
         }
 
-        # send cancellation email, but do not fail the API if email fails
+        # Send cancellation email (do not fail API on email error)
         email_sent = send_cancellation_email(user_email, booking_details, refund_amount)
         if not email_sent:
             logging.warning(f"Cancellation email failed for booking {booking_reference}")

@@ -160,30 +160,67 @@ pipeline {
         }
 
         // -----------------------------
-        // 8. Inject Gmail Credentials into ECS Booking Service
-        // -----------------------------
-        stage('Inject Gmail Credentials into ECS Booking Service') {
-            steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'gmail-user',
-                        usernameVariable: 'EMAIL_USER',
-                        passwordVariable: 'EMAIL_PASS'
-                    )
-                ]) {
-                    echo "Updating ECS Task Definition for Booking Service..."
-                    bat '''
-                    echo Fetching current task definition...
-                    for /f "delims=" %%A in ('aws ecs describe-services --cluster %CLUSTER_NAME% --services booking-service --query "services[0].taskDefinition" --output text') do set TASK_DEF_ARN=%%A
+// 8. Inject Gmail Credentials into ECS Booking Service
+// -----------------------------
+stage('Inject Gmail Credentials into ECS Booking Service') {
+    steps {
+        withCredentials([
+            usernamePassword(
+                credentialsId: 'gmail-user',
+                usernameVariable: 'EMAIL_USER',
+                passwordVariable: 'EMAIL_PASS'
+            )
+        ]) {
+            echo "Updating ECS Task Definition with Gmail credentials..."
 
-                    aws ecs describe-task-definition --task-definition %TASK_DEF_ARN% --query "taskDefinition" > task_def.json
-                    powershell -Command "$json = Get-Content task_def.json | ConvertFrom-Json; $json.containerDefinitions[0].environment += @(@{name='EMAIL_USER'; value='%EMAIL_USER%'}, @{name='EMAIL_PASS'; value='%EMAIL_PASS%'}); $json | ConvertTo-Json -Depth 10 | Out-File new_task_def.json -Encoding utf8"
-                    aws ecs register-task-definition --cli-input-json file://new_task_def.json > register_output.json
-                    aws ecs update-service --cluster %CLUSTER_NAME% --service booking-service --force-new-deployment --region %AWS_REGION%
-                    '''
-                }
-            }
+            bat """
+                echo Fetching current task definition...
+
+                for /f "delims=" %%A in ('aws ecs describe-services ^
+                    --cluster %CLUSTER_NAME% ^
+                    --services booking-service ^
+                    --query "services[0].taskDefinition" ^
+                    --output text') do set TASK_DEF_ARN=%%A
+
+                echo Current Task Definition: %TASK_DEF_ARN%
+
+                aws ecs describe-task-definition ^
+                    --task-definition %TASK_DEF_ARN% ^
+                    --query "taskDefinition" > task_def.json
+
+                powershell -Command ^
+                "$json = Get-Content 'task_def.json' | ConvertFrom-Json;" ^
+                "$envList = @();" ^
+                "foreach (\$env in \$json.containerDefinitions[0].environment) { if (\$env.name -ne 'EMAIL_USER' -and \$env.name -ne 'EMAIL_PASS') { \$envList += \$env } };" ^
+                "\$envList += @{ name='EMAIL_USER'; value='${EMAIL_USER}' };" ^
+                "\$envList += @{ name='EMAIL_PASS'; value='${EMAIL_PASS}' };" ^
+                "\$json.containerDefinitions[0].environment = \$envList;" ^
+                "\$json | ConvertTo-Json -Depth 15 | Out-File 'new_task_def.json' -Encoding UTF8;"
+
+                aws ecs register-task-definition ^
+                    --cli-input-json file://new_task_def.json ^
+                    --region %AWS_REGION% > register_output.json
+
+                echo Registered new task definition.
+
+                for /f "delims=" %%B in ('powershell -Command ^
+                    "(Get-Content register_output.json | ConvertFrom-Json).taskDefinition.taskDefinitionArn"') do set NEW_TASK_DEF=%%B
+
+                echo Updating ECS booking-service to new task def: %NEW_TASK_DEF%
+
+                aws ecs update-service ^
+                    --cluster %CLUSTER_NAME% ^
+                    --service booking-service ^
+                    --task-definition %NEW_TASK_DEF% ^
+                    --force-new-deployment ^
+                    --region %AWS_REGION%
+
+                echo ECS update completed successfully.
+            """
         }
+    }
+}
+
 
         // -----------------------------
         // 9. Inject YouTube API Key into ECS CrowdPulse Service
