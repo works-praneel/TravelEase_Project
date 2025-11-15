@@ -14,9 +14,133 @@ pipeline {
 
     stages {
 
-        // ... (Stages 1 through 7 remain unchanged) ...
+        // 1. Checkout Code
+        stage('1. Checkout SCM') {
+            steps {
+                checkout scm
+            }
+        }
 
-        // 8. Inject Gmail Credentials into ECS Booking Service
+        // 2. AWS & ECR Login
+        stage('2. Login to AWS & ECR') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'BNmnx0bIy24ahJTSUi6MIEpYUVmCTV8dyMBfH6cq',
+                        usernameVariable: 'AWS_ACCESS_KEY_ID',
+                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                    )
+                ]) {
+                    bat """
+                        aws configure set aws_access_key_id %AWS_ACCESS_KEY_ID%
+                        aws configure set aws_secret_access_key %AWS_SECRET_ACCESS_KEY%
+                        aws configure set region %AWS_REGION%
+                        aws ecr get-login-password --region %AWS_REGION% | docker login --username AWS --password-stdin %ECR_REGISTRY%
+                    """
+                }
+            }
+        }
+
+        // 3. Infrastructure (Terraform)
+        stage('3. Apply Infrastructure (Terraform)') {
+            steps {
+                dir("${TERRAFORM_DIR}") {
+                    bat '''
+                        terraform init -input=false
+                        terraform apply -auto-approve
+                        terraform output -json > tf_outputs.json
+                    '''
+                }
+            }
+        }
+
+        // 4. Fetch Terraform Outputs
+        stage('4. Fetch Terraform Outputs') {
+            steps {
+                script {
+                    echo "Reading outputs from tf_outputs.json..."
+
+                    def outputs = readJSON file: "${TERRAFORM_DIR}/tf_outputs.json"
+
+                    env.ALB_DNS      = outputs.load_balancer_dns.value
+                    env.S3_BUCKET_NAME = outputs.frontend_bucket_name.value
+                    env.FRONTEND_URL   = "http://${outputs.load_balancer_dns.value}"
+                    env.FRONTEND_SITE  = outputs.frontend_website_url.value
+
+                    echo "--------------------------------------"
+                    echo " Backend ALB DNS: ${env.ALB_DNS}"
+                    echo " Frontend S3 Bucket: ${env.S3_BUCKET_NAME}"
+                    echo " Frontend Website: ${env.FRONTEND_SITE}"
+                    echo "--------------------------------------"
+                }
+            }
+        }
+
+        // 5. Update Frontend URL and Deploy
+        stage('5. Update Frontend URL and Deploy') {
+            steps {
+                script {
+                    echo "Updating frontend URLs and deploying to S3..."
+                    bat """
+                        "C:\\Users\\bruhn\\AppData\\Local\\Programs\\Python\\Python311\\python.exe" update_frontend_and_deploy.py .
+                    """
+                }
+            }
+        }
+
+        // 6. Build & Push Docker Images
+        stage('6. Build & Push Docker Images') {
+            steps {
+                script {
+                    def services = [
+                        'booking-service'   : 'Booking_Service',
+                        'flight-service'    : 'Flight_Service',
+                        'payment-service'   : 'Payment_Service',
+                        'crowdpulse-service': 'CrowdPulse\\backend'
+                    ]
+
+                    services.each { repoName, folder ->
+                        echo "Building and pushing image for ${repoName}..."
+
+                        if (repoName == 'booking-service') {
+                            withCredentials([
+                                usernamePassword(
+                                    credentialsId: 'gmail-user',
+                                    usernameVariable: 'EMAIL_USER',
+                                    passwordVariable: 'EMAIL_PASS'
+                                )
+                            ]) {
+                                bat """
+                                    echo Building Booking Service with Gmail credentials...
+                                    docker build --build-arg EMAIL_USER=%EMAIL_USER% --build-arg EMAIL_PASS=%EMAIL_PASS% -t %ECR_REGISTRY%/${repoName}:latest ${folder}
+                                    docker push %ECR_REGISTRY%/${repoName}:latest
+                                """
+                            }
+                        } else {
+                            bat """
+                                docker build -t %ECR_REGISTRY%/${repoName}:latest ${folder}
+                                docker push %ECR_REGISTRY%/${repoName}:latest
+                            """
+                        }
+                    }
+                }
+            }
+        }
+
+        // 7. Force ECS Redeployment
+        stage('7. Force ECS Redeployment') {
+            steps {
+                bat '''
+                    echo Redeploying ECS Services...
+                    aws ecs update-service --cluster %CLUSTER_NAME% --service booking-service --force-new-deployment --region %AWS_REGION%
+                    aws ecs update-service --cluster %CLUSTER_NAME% --service flight-service --force-new-deployment --region %AWS_REGION%
+                    aws ecs update-service --cluster %CLUSTER_NAME% --service payment-service --force-new-deployment --region %AWS_REGION%
+                    aws ecs update-service --cluster %CLUSTER_NAME% --service crowdpulse-service --force-new-deployment --region %AWS_REGION%
+                '''
+            }
+        }
+
+        // 8. Inject Gmail Credentials into ECS Booking Service (Windows Fix)
         stage('8. Inject Gmail Credentials into ECS Booking Service') {
             steps {
                 withCredentials([
@@ -62,17 +186,14 @@ pipeline {
                         """
 
                         // Part 2: Read ARN using robust Groovy/PowerShell
-                        // This handles the environment variable capture outside of the volatile 'bat' block.
                         try {
                             new_task_def_arn = powershell(
                                 script: "(Get-Content 'register_output.json' | ConvertFrom-Json).taskDefinition.taskDefinitionArn",
                                 returnStdout: true,
-                                // Add a timeout, sometimes AWS output file is empty
                                 timeout: 10
                             ).trim()
                         } catch (e) {
                             echo "Warning: Could not read new Task Definition ARN. It's likely the registration failed."
-                            // Keep the ARN empty to trigger the check below
                         }
 
                         // Part 3: Update Service
@@ -95,7 +216,7 @@ pipeline {
         }
 
 
-        // 9. Inject YouTube API Key into ECS CrowdPulse Service
+        // 9. Inject YouTube API Key into ECS CrowdPulse Service (Windows Fix)
         stage('9. Inject YouTube API Key into ECS CrowdPulse Service') {
             steps {
                 withCredentials([string(credentialsId: 'youtube-api-key', variable: 'YOUTUBE_API_KEY')]) {
@@ -131,7 +252,6 @@ pipeline {
                             ).trim()
                         } catch (e) {
                             echo "Warning: Could not read new Task Definition ARN. It's likely the registration failed."
-                            // Keep the ARN empty to trigger the check below
                         }
                         
                         // Part 3: Update Service
