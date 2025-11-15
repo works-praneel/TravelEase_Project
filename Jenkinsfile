@@ -140,7 +140,7 @@ pipeline {
             }
         }
 
-        // 8. Inject Gmail Credentials into ECS Booking Service (Fixed Groovy Escaping)
+        // 8. Inject Gmail Credentials into ECS Booking Service (Fixed: Removed internal comments)
         stage('8. Inject Gmail Credentials into ECS Booking Service') {
             steps {
                 withCredentials([
@@ -169,7 +169,6 @@ pipeline {
                                 --task-definition %TASK_DEF_ARN% ^
                                 --query "taskDefinition" > task_def.json
 
-                            :: FIX 1: Corrected PowerShell syntax by escaping $_ with $$ and \$td to avoid Groovy errors.
                             powershell -Command "\$td = Get-Content 'task_def.json' | ConvertFrom-Json; \$td.containerDefinitions[0].environment = @(\$td.containerDefinitions[0].environment | Where-Object {$$.name -ne 'EMAIL_USER' -and $$.name -ne 'EMAIL_PASS'}); \$td.containerDefinitions[0].environment += @{ name='EMAIL_USER'; value='%USR%' }; \$td.containerDefinitions[0].environment += @{ name='EMAIL_PASS'; value='%PWD%' }; \$new_td = @{ containerDefinitions = \$td.containerDefinitions; family = \$td.family; networkMode = \$td.networkMode; requiresCompatibilities = \$td.requiresCompatibilities; cpu = \$td.cpu; memory = \$td.memory }; if (\$td.taskRoleArn) { \$new_td.taskRoleArn = \$td.taskRoleArn }; if (\$td.executionRoleArn) { \$new_td.executionRoleArn = \$td.executionRoleArn }; \$new_td | ConvertTo-Json -Depth 15 | Out-File 'new_task_def.json' -Encoding UTF8"
                             
                             echo DEBUG: FILE CONTENT (new_task_def.json):
@@ -216,7 +215,7 @@ pipeline {
         }
 
 
-        // 9. Inject YouTube API Key into ECS CrowdPulse Service (Fixed Groovy Escaping)
+        // 9. Inject YouTube API Key into ECS CrowdPulse Service (Fixed: Removed internal comments)
         stage('9. Inject YouTube API Key into ECS CrowdPulse Service') {
             steps {
                 withCredentials([string(credentialsId: 'youtube-api-key', variable: 'YOUTUBE_API_KEY')]) {
@@ -229,7 +228,6 @@ pipeline {
 
                             aws ecs describe-task-definition --task-definition %TASK_DEF_ARN% --query "taskDefinition" > task_def_crowdpulse.json
 
-                            :: FIX 1: Corrected PowerShell syntax by escaping $_ with $$ and $td to avoid Groovy errors.
                             powershell -Command "\$td = Get-Content 'task_def_crowdpulse.json' | ConvertFrom-Json; \$td.containerDefinitions[0].environment = @(\$td.containerDefinitions[0].environment | Where-Object {$$_.name -ne 'YOUTUBE_API_KEY'}); \$td.containerDefinitions[0].environment += @{ name='YOUTUBE_API_KEY'; value='%YOUTUBE_API_KEY%' }; \$new_td = @{ containerDefinitions = \$td.containerDefinitions; family = \$td.family; networkMode = \$td.networkMode; requiresCompatibilities = \$td.requiresCompatibilities; cpu = \$td.cpu; memory = \$td.memory }; if (\$td.taskRoleArn) { \$new_td.taskRoleArn = \$td.taskRoleArn }; if (\$td.executionRoleArn) { \$new_td.executionRoleArn = \$td.executionRoleArn }; \$new_td | ConvertTo-Json -Depth 10 | Out-File 'new_task_def_crowdpulse.json' -Encoding UTF8"
 
                             echo DEBUG: FILE CONTENT (new_task_def_crowdpulse.json):
