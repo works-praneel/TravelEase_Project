@@ -62,7 +62,7 @@ pipeline {
 
                     def outputs = readJSON file: "${TERRAFORM_DIR}/tf_outputs.json"
 
-                    env.ALB_DNS        = outputs.load_balancer_dns.value
+                    env.ALB_DNS      = outputs.load_balancer_dns.value
                     env.S3_BUCKET_NAME = outputs.frontend_bucket_name.value
                     env.FRONTEND_URL   = "http://${outputs.load_balancer_dns.value}"
                     env.FRONTEND_SITE  = outputs.frontend_website_url.value
@@ -141,93 +141,63 @@ pipeline {
         }
 
         // 8. Inject Gmail Credentials into ECS Booking Service
-stage('8. Inject Gmail Credentials into ECS Booking Service') {
-    steps {
-        withCredentials([
-            usernamePassword(
-                credentialsId: 'gmail-user',
-                usernameVariable: 'USR',
-                passwordVariable: 'PWD'
-            )
-        ]) {
+        stage('8. Inject Gmail Credentials into ECS Booking Service') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'gmail-user',
+                        usernameVariable: 'USR',
+                        passwordVariable: 'PWD'
+                    )
+                ]) {
+                    // FIX: PowerShell command is now on a single logical line
+                    bat """
+                        echo Fetching current task definition...
 
-            // NOTE: The Groovy variables USR and PWD must be explicitly injected into the BAT shell's environment
-            // This is done by Jenkins automatically inside the 'withCredentials' block.
-            
-            bat """
-                echo Fetching current task definition...
+                        for /f "delims=" %%A in ('aws ecs describe-services ^
+                            --cluster %CLUSTER_NAME% ^
+                            --services booking-service ^
+                            --query "services[0].taskDefinition" ^
+                            --output text') do set TASK_DEF_ARN=%%A
 
-                for /f "delims=" %%A in ('aws ecs describe-services ^
-                    --cluster %CLUSTER_NAME% ^
-                    --services booking-service ^
-                    --query "services[0].taskDefinition" ^
-                    --output text') do set TASK_DEF_ARN=%%A
+                        echo Current Task Definition: %TASK_DEF_ARN%
 
-                echo Current Task Definition: %TASK_DEF_ARN%
+                        aws ecs describe-task-definition ^
+                            --task-definition %TASK_DEF_ARN% ^
+                            --query "taskDefinition" > task_def.json
 
-                aws ecs describe-task-definition ^
-                    --task-definition %TASK_DEF_ARN% ^
-                    --query "taskDefinition" > task_def.json
+                        powershell -Command "\$json = Get-Content 'task_def.json' | ConvertFrom-Json; \$envList = @(); foreach (\$env in \$json.containerDefinitions[0].environment) { if (\$env.name -ne 'EMAIL_USER' -and \$env.name -ne 'EMAIL_PASS') { \$envList += \$env; } }; \$envList += @{ name='EMAIL_USER'; value='%USR%' }; \$envList += @{ name='EMAIL_PASS'; value='%PWD%' }; \$json.containerDefinitions[0].environment = \$envList; \$json | ConvertTo-Json -Depth 15 | Out-File 'new_task_def.json' -Encoding UTF8"
+                        
+                        aws ecs register-task-definition ^
+                            --cli-input-json file://new_task_def.json ^
+                            --region %AWS_REGION% > register_output.json
 
-                // --- FIX: Use single quotes for powershell -Command argument and correctly reference BAT variables ---
-                powershell -Command "
-                    \$json = Get-Content 'task_def.json' | ConvertFrom-Json;
-                    \$envList = @();
-                    
-                    foreach (\$env in \$json.containerDefinitions[0].environment) {
-                        if (\$env.name -ne 'EMAIL_USER' -and \$env.name -ne 'EMAIL_PASS') {
-                            \$envList += \$env;
-                        }
-                    }
-                    
-                    // The variables %USR% and %PWD% are substituted by the BAT shell before PowerShell runs.
-                    \$envList += @{ name='EMAIL_USER'; value='%USR%' };
-                    \$envList += @{ name='EMAIL_PASS'; value='%PWD%' };
-                    
-                    \$json.containerDefinitions[0].environment = \$envList;
-                    \$json | ConvertTo-Json -Depth 15 | Out-File 'new_task_def.json' -Encoding UTF8;
-                "
-                
-                // --- CONTINUE AWS COMMANDS ---
+                        for /f "delims=" %%B in ('powershell -Command ^
+                            "(Get-Content register_output.json | ConvertFrom-Json).taskDefinition.taskDefinitionArn"') do set NEW_TASK_DEF=%%B
 
-                aws ecs register-task-definition ^
-                    --cli-input-json file://new_task_def.json ^
-                    --region %AWS_REGION% > register_output.json
-
-                for /f "delims=" %%B in ('powershell -Command ^
-                    "(Get-Content register_output.json | ConvertFrom-Json).taskDefinition.taskDefinitionArn"') do set NEW_TASK_DEF=%%B
-
-                aws ecs update-service ^
-                    --cluster %CLUSTER_NAME% ^
-                    --service booking-service ^
-                    --task-definition %NEW_TASK_DEF% ^
-                    --force-new-deployment ^
-                    --region %AWS_REGION%
-            """
+                        aws ecs update-service ^
+                            --cluster %CLUSTER_NAME% ^
+                            --service booking-service ^
+                            --task-definition %NEW_TASK_DEF% ^
+                            --force-new-deployment ^
+                            --region %AWS_REGION%
+                    """
+                }
+            }
         }
-    }
-}
 
 
         // 9. Inject YouTube API Key into ECS CrowdPulse Service
         stage('9. Inject YouTube API Key into ECS CrowdPulse Service') {
             steps {
                 withCredentials([string(credentialsId: 'youtube-api-key', variable: 'YOUTUBE_API_KEY')]) {
+                    // FIX: PowerShell command is now on a single logical line
                     bat '''
                         for /f "delims=" %%A in ('aws ecs describe-services --cluster %CLUSTER_NAME% --services crowdpulse-service --query "services[0].taskDefinition" --output text') do set TASK_DEF_ARN=%%A
 
                         aws ecs describe-task-definition --task-definition %TASK_DEF_ARN% --query "taskDefinition" > task_def_crowdpulse.json
 
-                        powershell -Command "
-                            $json = Get-Content 'task_def_crowdpulse.json' | ConvertFrom-Json;
-                            $envList = @();
-                            foreach ($env in $json.containerDefinitions[0].environment) {
-                                if ($env.name -ne 'YOUTUBE_API_KEY') { $envList += $env }
-                            }
-                            $envList += @{ name='YOUTUBE_API_KEY'; value='%YOUTUBE_API_KEY%' };
-                            $json.containerDefinitions[0].environment = $envList;
-                            $json | ConvertTo-Json -Depth 10 | Out-File new_task_def_crowdpulse.json -Encoding utf8
-                        "
+                        powershell -Command "$json = Get-Content 'task_def_crowdpulse.json' | ConvertFrom-Json; $envList = @(); foreach ($env in $json.containerDefinitions[0].environment) { if ($env.name -ne 'YOUTUBE_API_KEY') { $envList += $env } }; $envList += @{ name='YOUTUBE_API_KEY'; value='%YOUTUBE_API_KEY%' }; $json.containerDefinitions[0].environment = $envList; $json | ConvertTo-Json -Depth 10 | Out-File new_task_def_crowdpulse.json -Encoding utf8"
 
                         aws ecs register-task-definition --cli-input-json file://new_task_def_crowdpulse.json > register_output_crowdpulse.json
 
@@ -269,13 +239,28 @@ stage('8. Inject Gmail Credentials into ECS Booking Service') {
             }
         }
     }
-
+    
+    // Conditional Cleanup Logic
     post {
-        success {
-            echo 'Deployment completed successfully.'
-        }
+        // Runs IMMEDIATELY if the pipeline fails at any stage
         failure {
-            echo 'Deployment failed. Check logs for details.'
+            echo '🚨 Deployment failed. Starting IMMEDIATE infrastructure teardown (terraform destroy).'
+            dir("${TERRAFORM_DIR}") {
+                bat 'terraform destroy -auto-approve'
+            }
+        }
+        
+        // Runs only if the pipeline completes all stages successfully
+        success {
+            echo '✅ Deployment completed successfully. Waiting 15 minutes before starting infrastructure teardown.'
+            
+            // Wait for 15 minutes (900 seconds)
+            sleep(time: 15, unit: 'MINUTES')
+            
+            echo '⏳ 15 minutes elapsed. Starting infrastructure teardown (terraform destroy).'
+            dir("${TERRAFORM_DIR}") {
+                bat 'terraform destroy -auto-approve'
+            }
         }
     }
 }
