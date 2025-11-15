@@ -160,6 +160,8 @@ pipeline {
         }
 
         // -----------------------------
+
+// -----------------------------
 // 8. Inject Gmail Credentials into ECS Booking Service
 // -----------------------------
 stage('Inject Gmail Credentials into ECS Booking Service') {
@@ -189,13 +191,13 @@ stage('Inject Gmail Credentials into ECS Booking Service') {
                     --query "taskDefinition" > task_def.json
 
                 powershell -Command ^
-                "$json = Get-Content 'task_def.json' | ConvertFrom-Json;" ^
-                "$envList = @();" ^
-                "foreach (\$env in \$json.containerDefinitions[0].environment) { if (\$env.name -ne 'EMAIL_USER' -and \$env.name -ne 'EMAIL_PASS') { \$envList += \$env } };" ^
-                "\$envList += @{ name='EMAIL_USER'; value='${EMAIL_USER}' };" ^
-                "\$envList += @{ name='EMAIL_PASS'; value='${EMAIL_PASS}' };" ^
-                "\$json.containerDefinitions[0].environment = \$envList;" ^
-                "\$json | ConvertTo-Json -Depth 15 | Out-File 'new_task_def.json' -Encoding UTF8;"
+                "\$json = Get-Content 'task_def.json' | ConvertFrom-Json; ^
+                \$envList = @(); ^
+                foreach (\$env in \$json.containerDefinitions[0].environment) { if (\$env.name -ne 'EMAIL_USER' -and \$env.name -ne 'EMAIL_PASS') { \$envList += \$env } }; ^
+                \$envList += @{ name='EMAIL_USER'; value='${EMAIL_USER}' }; ^
+                \$envList += @{ name='EMAIL_PASS'; value='${EMAIL_PASS}' }; ^
+                \$json.containerDefinitions[0].environment = \$envList; ^
+                \$json | ConvertTo-Json -Depth 15 | Out-File 'new_task_def.json' -Encoding UTF8;"
 
                 aws ecs register-task-definition ^
                     --cli-input-json file://new_task_def.json ^
@@ -220,6 +222,7 @@ stage('Inject Gmail Credentials into ECS Booking Service') {
         }
     }
 }
+
 
 
         // -----------------------------
