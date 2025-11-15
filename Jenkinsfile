@@ -73,7 +73,7 @@ pipeline {
                         env.FRONTEND_URL   = "http://${outputs.load_balancer_dns.value}"
                         env.FRONTEND_SITE  = outputs.frontend_website_url.value
                     } catch (Exception e) {
-                        echo "⚠️ JSON output read failed, falling back to CLI extraction"
+                        echo "JSON output read failed, using CLI fallback..."
                         env.ALB_DNS        = powershell(returnStdout: true, script: "terraform -chdir=${TERRAFORM_DIR} output -raw load_balancer_dns").trim()
                         env.S3_BUCKET_NAME = powershell(returnStdout: true, script: "terraform -chdir=${TERRAFORM_DIR} output -raw frontend_bucket_name").trim()
                         env.FRONTEND_SITE  = powershell(returnStdout: true, script: "terraform -chdir=${TERRAFORM_DIR} output -raw frontend_website_url").trim()
@@ -95,7 +95,7 @@ pipeline {
         stage('Update Frontend URL and Deploy') {
             steps {
                 script {
-                    echo "🚀 Updating frontend URLs and deploying to S3..."
+                    echo "Updating frontend URLs and deploying to S3..."
                     bat """
                     "C:\\Users\\bruhn\\AppData\\Local\\Programs\\Python\\Python311\\python.exe" update_frontend_and_deploy.py .
                     """
@@ -104,7 +104,7 @@ pipeline {
         }
 
         // -----------------------------
-        // 6. Build & Push Docker Images (Gmail handled here)
+        // 6. Build & Push Docker Images
         // -----------------------------
         stage('Build & Push Docker Images') {
             steps {
@@ -129,10 +129,7 @@ pipeline {
                             ]) {
                                 bat """
                                 echo Building Booking Service with Gmail credentials...
-                                docker build ^
-                                    --build-arg EMAIL_USER=%EMAIL_USER% ^
-                                    --build-arg EMAIL_PASS=%EMAIL_PASS% ^
-                                    -t %ECR_REGISTRY%/${repoName}:latest ${folder}
+                                docker build --build-arg EMAIL_USER=%EMAIL_USER% --build-arg EMAIL_PASS=%EMAIL_PASS% -t %ECR_REGISTRY%/${repoName}:latest ${folder}
                                 docker push %ECR_REGISTRY%/${repoName}:latest
                                 """
                             }
@@ -174,9 +171,9 @@ pipeline {
                         passwordVariable: 'EMAIL_PASS'
                     )
                 ]) {
-                    echo "🔐 Updating ECS Task Definition for Booking Service with Gmail credentials..."
+                    echo "Updating ECS Task Definition for Booking Service..."
                     bat '''
-                    echo Fetching current Booking Service task definition...
+                    echo Fetching current task definition...
                     for /f "delims=" %%A in ('aws ecs describe-services --cluster %CLUSTER_NAME% --services booking-service --query "services[0].taskDefinition" --output text') do set TASK_DEF_ARN=%%A
 
                     aws ecs describe-task-definition --task-definition %TASK_DEF_ARN% --query "taskDefinition" > task_def.json
@@ -194,7 +191,7 @@ pipeline {
         stage('Inject YouTube API Key into ECS CrowdPulse Service') {
             steps {
                 withCredentials([string(credentialsId: 'youtube-api-key', variable: 'YOUTUBE_API_KEY')]) {
-                    echo "🎥 Updating ECS Task Definition for CrowdPulse with YouTube API Key..."
+                    echo "Updating ECS CrowdPulse Task Definition..."
                     bat '''
                     for /f "delims=" %%A in ('aws ecs describe-services --cluster %CLUSTER_NAME% --services crowdpulse-service --query "services[0].taskDefinition" --output text') do set TASK_DEF_ARN=%%A
 
@@ -213,9 +210,9 @@ pipeline {
         stage('Verify Frontend Upload') {
             steps {
                 bat '''
-                echo ✅ Verifying uploaded frontend files in S3...
+                echo Verifying uploaded frontend files...
                 aws s3 ls s3://%S3_BUCKET_NAME%/
-                echo ♻️ Refreshing CrowdPulse widget in S3...
+                echo Refreshing CrowdPulse widget...
                 aws s3 rm s3://%S3_BUCKET_NAME%/CrowdPulse/frontend/crowdpulse_widget.html
                 aws s3 cp CrowdPulse\\frontend\\crowdpulse_widget.html s3://%S3_BUCKET_NAME%/CrowdPulse/frontend/crowdpulse_widget.html --content-type text/html
                 '''
@@ -228,8 +225,7 @@ pipeline {
         stage('Deployment Summary') {
             steps {
                 echo "--------------------------------------"
-                echo "✅ TravelEase Deployment Complete!"
-                echo "All backend services (Booking Email + CrowdPulse YouTube) are live and configured."
+                echo "TravelEase Deployment Complete!"
                 echo "--------------------------------------"
             }
         }
@@ -239,7 +235,7 @@ pipeline {
         // -----------------------------
         stage('Show Deployed Website URL') {
             steps {
-                echo "🌐 Deployed TravelEase Website:"
+                echo "Deployed TravelEase Website:"
                 bat 'powershell -Command "(Get-Content .\\terraform\\tf_outputs.json | ConvertFrom-Json | Select-Object -ExpandProperty frontend_website_url | Select-Object -ExpandProperty value)"'
             }
         }
@@ -247,10 +243,10 @@ pipeline {
 
     post {
         success {
-            echo '✅ Deployment completed successfully.'
+            echo 'Deployment completed successfully.'
         }
         failure {
-            echo '❌ Deployment failed. Check logs for details.'
+            echo 'Deployment failed. Check logs for details.'
         }
     }
 }
