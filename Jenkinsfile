@@ -154,7 +154,7 @@ pipeline {
             }
         }
         
-        # --- Inject Gmail Credentials (Stage 8) ---
+        // // --- Inject Gmail Credentials (Stage 8) ---
         stage('8. Inject Gmail Credentials (Booking Service)') {
             steps {
                 withCredentials([
@@ -176,7 +176,7 @@ pipeline {
                             // CRITICAL FIX: Filter out old credentials using \$\_.name
                             \$td.containerDefinitions[0].environment = @(\$td.containerDefinitions[0].environment | Where-Object { \$\_.name -ne 'EMAIL_USER' -and \$\_.name -ne 'EMAIL_PASS' });
                             
-                            // Add new credentials using Groovy interpolation
+                            // Add new credentials (Jenkins variables are injected using Groovy's \${variable} syntax)
                             \$td.containerDefinitions[0].environment += @{ name='EMAIL_USER'; value='${USR}' };
                             \$td.containerDefinitions[0].environment += @{ name='EMAIL_PASS'; value='${PWD}' };
                             
@@ -203,7 +203,7 @@ pipeline {
 
                         if (new_task_def_arn) {
                             echo "Successfully registered new Task Definition: ${new_task_def_arn}"
-                            // Use BAT interpolation for %CLUSTER_NAME% and Groovy interpolation for ${new_task_def_arn}
+                            // Update the service with the new ARN
                             bat """
                                 aws ecs update-service --cluster %CLUSTER_NAME% --service booking-service --task-definition ${new_task_def_arn} --force-new-deployment --region %AWS_REGION%
                             """
@@ -216,7 +216,7 @@ pipeline {
         }
 
 
-        # --- Inject YouTube API Key (Stage 9) ---
+        // // --- Inject YouTube API Key (Stage 9) ---
         stage('9. Inject YouTube API Key (CrowdPulse Service)') {
             steps {
                 withCredentials([string(credentialsId: 'youtube-api-key', variable: 'YOUTUBE_API_KEY')]) {
