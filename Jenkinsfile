@@ -161,19 +161,16 @@ pipeline {
 
         // -----------------------------
 
-// -----------------------------
 // 8. Inject Gmail Credentials into ECS Booking Service
-// -----------------------------
 stage('Inject Gmail Credentials into ECS Booking Service') {
     steps {
         withCredentials([
             usernamePassword(
                 credentialsId: 'gmail-user',
-                usernameVariable: 'EMAIL_USER',
-                passwordVariable: 'EMAIL_PASS'
+                usernameVariable: 'USR',
+                passwordVariable: 'PWD'
             )
         ]) {
-            echo "Updating ECS Task Definition with Gmail credentials..."
 
             bat """
                 echo Fetching current task definition...
@@ -190,25 +187,29 @@ stage('Inject Gmail Credentials into ECS Booking Service') {
                     --task-definition %TASK_DEF_ARN% ^
                     --query "taskDefinition" > task_def.json
 
-                powershell -Command ^
-                "\$json = Get-Content 'task_def.json' | ConvertFrom-Json; ^
-                \$envList = @(); ^
-                foreach (\$env in \$json.containerDefinitions[0].environment) { if (\$env.name -ne 'EMAIL_USER' -and \$env.name -ne 'EMAIL_PASS') { \$envList += \$env } }; ^
-                \$envList += @{ name='EMAIL_USER'; value='${EMAIL_USER}' }; ^
-                \$envList += @{ name='EMAIL_PASS'; value='${EMAIL_PASS}' }; ^
-                \$json.containerDefinitions[0].environment = \$envList; ^
-                \$json | ConvertTo-Json -Depth 15 | Out-File 'new_task_def.json' -Encoding UTF8;"
+                powershell -Command "
+                    \$json = Get-Content 'task_def.json' | ConvertFrom-Json;
+                    \$envList = @();
+
+                    foreach (\$env in \$json.containerDefinitions[0].environment) {
+                        if (\$env.name -ne 'EMAIL_USER' -and \$env.name -ne 'EMAIL_PASS') {
+                            \$envList += \$env;
+                        }
+                    }
+
+                    \$envList += @{ name='EMAIL_USER'; value='$USR' };
+                    \$envList += @{ name='EMAIL_PASS'; value='$PWD' };
+
+                    \$json.containerDefinitions[0].environment = \$envList;
+                    \$json | ConvertTo-Json -Depth 15 | Out-File 'new_task_def.json' -Encoding UTF8;
+                "
 
                 aws ecs register-task-definition ^
                     --cli-input-json file://new_task_def.json ^
                     --region %AWS_REGION% > register_output.json
 
-                echo Registered new task definition.
-
                 for /f "delims=" %%B in ('powershell -Command ^
                     "(Get-Content register_output.json | ConvertFrom-Json).taskDefinition.taskDefinitionArn"') do set NEW_TASK_DEF=%%B
-
-                echo Updating ECS booking-service to new task def: %NEW_TASK_DEF%
 
                 aws ecs update-service ^
                     --cluster %CLUSTER_NAME% ^
@@ -216,14 +217,10 @@ stage('Inject Gmail Credentials into ECS Booking Service') {
                     --task-definition %NEW_TASK_DEF% ^
                     --force-new-deployment ^
                     --region %AWS_REGION%
-
-                echo ECS update completed successfully.
             """
         }
     }
 }
-
-
 
         // -----------------------------
         // 9. Inject YouTube API Key into ECS CrowdPulse Service
