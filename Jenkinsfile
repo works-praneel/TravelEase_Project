@@ -88,7 +88,7 @@ pipeline {
             }
         }
 
-        // 6. Build & Push Docker Images
+        // 6. Build & Push Docker Images (Uses """...""" for Groovy variable interpolation)
         stage('6. Build & Push Docker Images') {
             steps {
                 script {
@@ -110,19 +110,19 @@ pipeline {
                                     passwordVariable: 'EMAIL_PASS'
                                 )
                             ]) {
-                                // IMPORTANT: Switched to Single quotes ('') to avoid Groovy interpolation errors.
-                                bat '''
+                                // Double quotes """...""" needed here for ${repoName} and ${folder}
+                                bat """
                                     echo Building Booking Service with Gmail credentials...
                                     docker build --build-arg EMAIL_USER=%EMAIL_USER% --build-arg EMAIL_PASS=%EMAIL_PASS% -t %ECR_REGISTRY%/${repoName}:latest ${folder}
                                     docker push %ECR_REGISTRY%/${repoName}:latest
-                                '''
+                                """
                             }
                         } else {
-                            // IMPORTANT: Switched to Single quotes ('') to avoid Groovy interpolation errors.
-                            bat '''
+                            // Double quotes """...""" needed here for ${repoName} and ${folder}
+                            bat """
                                 docker build -t %ECR_REGISTRY%/${repoName}:latest ${folder}
                                 docker push %ECR_REGISTRY%/${repoName}:latest
-                            '''
+                            """
                         }
                     }
                 }
@@ -142,7 +142,7 @@ pipeline {
             }
         }
 
-        // 8. Inject Gmail Credentials into ECS Booking Service (Switched to safer triple single quotes)
+        // 8. Inject Gmail Credentials into ECS Booking Service
         stage('8. Inject Gmail Credentials into ECS Booking Service') {
             steps {
                 withCredentials([
@@ -156,7 +156,8 @@ pipeline {
                         def new_task_def_arn = ''
                         
                         // Part 1: Fetch, Modify, and Register Task Definition (using bat for multiple AWS calls)
-                        bat '''
+                        // Uses """...""" for Groovy interpolation in Part 3. PowerShell is escaped heavily.
+                        bat """
                             echo Fetching current task definition...
                             
                             for /f "delims=" %%A in ('aws ecs describe-services ^
@@ -171,8 +172,8 @@ pipeline {
                                 --task-definition %TASK_DEF_ARN% ^
                                 --query "taskDefinition" > task_def.json
 
-                            :: The crucial line is now much safer from Groovy interpretation errors
-                            powershell -Command "\$td = Get-Content 'task_def.json' | ConvertFrom-Json; \$td.containerDefinitions[0].environment = @(\$td.containerDefinitions[0].environment | Where-Object {$$.name -ne 'EMAIL_USER' -and $$.name -ne 'EMAIL_PASS'}); \$td.containerDefinitions[0].environment += @{ name='EMAIL_USER'; value='%USR%' }; \$td.containerDefinitions[0].environment += @{ name='EMAIL_PASS'; value='%PWD%' }; \$new_td = @{ containerDefinitions = \$td.containerDefinitions; family = \$td.family; networkMode = \$td.networkMode; requiresCompatibilities = \$td.requiresCompatibilities; cpu = \$td.cpu; memory = \$td.memory }; if (\$td.taskRoleArn) { \$new_td.taskRoleArn = \$td.taskRoleArn }; if (\$td.executionRoleArn) { \$new_td.executionRoleArn = \$td.executionRoleArn }; \$new_td | ConvertTo-Json -Depth 15 | Out-File 'new_task_def.json' -Encoding UTF8"
+                            :: ESCAPING: \\\$td is needed for Groovy to pass \$td to PowerShell. \\\$\\\$_ is needed for Groovy to pass \$$ to PowerShell.
+                            powershell -Command "\\\$td = Get-Content 'task_def.json' | ConvertFrom-Json; \\\$td.containerDefinitions[0].environment = @(\\\$td.containerDefinitions[0].environment | Where-Object {\\\$\\\$.name -ne 'EMAIL_USER' -and \\\$\\\$.name -ne 'EMAIL_PASS'}); \\\$td.containerDefinitions[0].environment += @{ name='EMAIL_USER'; value='%USR%' }; \\\$td.containerDefinitions[0].environment += @{ name='EMAIL_PASS'; value='%PWD%' }; \\\$new_td = @{ containerDefinitions = \\\$td.containerDefinitions; family = \\\$td.family; networkMode = \\\$td.networkMode; requiresCompatibilities = \\\$td.requiresCompatibilities; cpu = \\\$td.cpu; memory = \\\$td.memory }; if (\\\$td.taskRoleArn) { \\\$new_td.taskRoleArn = \\\$td.taskRoleArn }; if (\\\$td.executionRoleArn) { \\\$new_td.executionRoleArn = \\\$td.executionRoleArn }; \\\$new_td | ConvertTo-Json -Depth 15 | Out-File 'new_task_def.json' -Encoding UTF8"
                             
                             echo DEBUG: FILE CONTENT (new_task_def.json):
                             type new_task_def.json
@@ -185,7 +186,7 @@ pipeline {
                             echo DEBUG: AWS ERROR OUTPUT (register_output.json):
                             type register_output.json
                             echo --------------------------------------
-                        '''
+                        """
 
                         // Part 2: Read ARN using robust Groovy/PowerShell
                         try {
@@ -201,14 +202,15 @@ pipeline {
                         // Part 3: Update Service
                         if (new_task_def_arn) {
                             echo "Successfully registered new Task Definition: ${new_task_def_arn}"
-                            bat '''
+                            // Double quotes """...""" needed here for ${new_task_def_arn}
+                            bat """
                                 aws ecs update-service ^
                                     --cluster %CLUSTER_NAME% ^
                                     --service booking-service ^
                                     --task-definition ${new_task_def_arn} ^
                                     --force-new-deployment ^
                                     --region %AWS_REGION%
-                            '''
+                            """
                         } else {
                             error("Failed to register new Task Definition. Check the 'DEBUG: AWS ERROR OUTPUT' for the exact reason.")
                         }
@@ -218,7 +220,7 @@ pipeline {
         }
 
 
-        // 9. Inject YouTube API Key into ECS CrowdPulse Service (Switched to safer triple single quotes)
+        // 9. Inject YouTube API Key into ECS CrowdPulse Service
         stage('9. Inject YouTube API Key into ECS CrowdPulse Service') {
             steps {
                 withCredentials([string(credentialsId: 'youtube-api-key', variable: 'YOUTUBE_API_KEY')]) {
@@ -226,12 +228,14 @@ pipeline {
                         def new_task_def_arn = ''
                         
                         // Part 1: Fetch, Modify, and Register Task Definition
-                        bat '''
+                        // Uses """...""" for Groovy interpolation in Part 3. PowerShell is escaped heavily.
+                        bat """
                             for /f "delims=" %%A in ('aws ecs describe-services --cluster %CLUSTER_NAME% --services crowdpulse-service --query "services[0].taskDefinition" --output text') do set TASK_DEF_ARN=%%A
 
                             aws ecs describe-task-definition --task-definition %TASK_DEF_ARN% --query "taskDefinition" > task_def_crowdpulse.json
 
-                            powershell -Command "\$td = Get-Content 'task_def_crowdpulse.json' | ConvertFrom-Json; \$td.containerDefinitions[0].environment = @(\$td.containerDefinitions[0].environment | Where-Object {$$_.name -ne 'YOUTUBE_API_KEY'}); \$td.containerDefinitions[0].environment += @{ name='YOUTUBE_API_KEY'; value='%YOUTUBE_API_KEY%' }; \$new_td = @{ containerDefinitions = \$td.containerDefinitions; family = \$td.family; networkMode = \$td.networkMode; requiresCompatibilities = \$td.requiresCompatibilities; cpu = \$td.cpu; memory = \$td.memory }; if (\$td.taskRoleArn) { \$new_td.taskRoleArn = \$td.taskRoleArn }; if (\$td.executionRoleArn) { \$new_td.executionRoleArn = \$td.executionRoleArn }; \$new_td | ConvertTo-Json -Depth 10 | Out-File 'new_task_def_crowdpulse.json' -Encoding UTF8"
+                            :: ESCAPING: \\\$td is needed for Groovy to pass \$td to PowerShell. \\\$\\\$_ is needed for Groovy to pass \$$ to PowerShell.
+                            powershell -Command "\\\$td = Get-Content 'task_def_crowdpulse.json' | ConvertFrom-Json; \\\$td.containerDefinitions[0].environment = @(\\\$td.containerDefinitions[0].environment | Where-Object {\\\$\\\$_.name -ne 'YOUTUBE_API_KEY'}); \\\$td.containerDefinitions[0].environment += @{ name='YOUTUBE_API_KEY'; value='%YOUTUBE_API_KEY%' }; \\\$new_td = @{ containerDefinitions = \\\$td.containerDefinitions; family = \\\$td.family; networkMode = \\\$td.networkMode; requiresCompatibilities = \\\$td.requiresCompatibilities; cpu = \\\$td.cpu; memory = \\\$td.memory }; if (\\\$td.taskRoleArn) { \\\$new_td.taskRoleArn = \\\$td.taskRoleArn }; if (\\\$td.executionRoleArn) { \\\$new_td.executionRoleArn = \\\$td.executionRoleArn }; \\\$new_td | ConvertTo-Json -Depth 10 | Out-File 'new_task_def_crowdpulse.json' -Encoding UTF8"
 
                             echo DEBUG: FILE CONTENT (new_task_def_crowdpulse.json):
                             type new_task_def_crowdpulse.json
@@ -242,7 +246,7 @@ pipeline {
                             echo DEBUG: AWS ERROR OUTPUT (register_output_crowdpulse.json):
                             type register_output_crowdpulse.json
                             echo --------------------------------------
-                        '''
+                        """
                         
                         // Part 2: Read ARN using robust Groovy/PowerShell
                         try {
@@ -258,9 +262,10 @@ pipeline {
                         // Part 3: Update Service
                         if (new_task_def_arn) {
                             echo "Successfully registered new Task Definition: ${new_task_def_arn}"
-                            bat '''
+                            // Double quotes """...""" needed here for ${new_task_def_arn}
+                            bat """
                                 aws ecs update-service --cluster %CLUSTER_NAME% --service crowdpulse-service --task-definition ${new_task_def_arn} --force-new-deployment --region %AWS_REGION%
-                            '''
+                            """
                         } else {
                             error("Failed to register new Task Definition. Check the 'DEBUG: AWS ERROR OUTPUT' for the exact reason.")
                         }
