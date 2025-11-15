@@ -370,7 +370,7 @@
         // --- API URL FUNCTION ---
         function getApiUrl(path, port) { 
             // This is your latest working ALB URL
-            const ALB_URL = "http://travelease-project-ALB-720876672.eu-north-1.elb.amazonaws.com";            
+            const ALB_URL = "http://travelease-project-ALB-487932557.eu-north-1.elb.amazonaws.com";            
             return `${ALB_URL}${path}`;
         }
 
@@ -897,7 +897,7 @@
         window.initCrowdPulse = (container, getApiUrl, destination_code) => {
             
             // This endpoint is from your backend code.
-            const API_ENDPOINT = "http://travelease-project-ALB-720876672.eu-north-1.elb.amazonaws.com";
+            const API_ENDPOINT = "http://travelease-project-ALB-487932557.eu-north-1.elb.amazonaws.com";
 
             const titleEl = container.querySelector('#cp-widget-title');
             const loaderEl = container.querySelector('#cp-widget-loader');
