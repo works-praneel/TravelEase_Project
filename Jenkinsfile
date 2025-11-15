@@ -150,7 +150,8 @@ pipeline {
                         passwordVariable: 'PWD'
                     )
                 ]) {
-                    // FIX: PowerShell command is now on a single logical line
+                    // FIX: 1. PowerShell command is on one logical line. 2. PowerShell removes unnecessary JSON keys. 
+                    // FIX: 3. Added setlocal enabledelayedexpansion to correctly use the NEW_TASK_DEF variable.
                     bat """
                         echo Fetching current task definition...
 
@@ -166,21 +167,27 @@ pipeline {
                             --task-definition %TASK_DEF_ARN% ^
                             --query "taskDefinition" > task_def.json
 
-                        powershell -Command "\$json = Get-Content 'task_def.json' | ConvertFrom-Json; \$envList = @(); foreach (\$env in \$json.containerDefinitions[0].environment) { if (\$env.name -ne 'EMAIL_USER' -and \$env.name -ne 'EMAIL_PASS') { \$envList += \$env; } }; \$envList += @{ name='EMAIL_USER'; value='%USR%' }; \$envList += @{ name='EMAIL_PASS'; value='%PWD%' }; \$json.containerDefinitions[0].environment = \$envList; \$json | ConvertTo-Json -Depth 15 | Out-File 'new_task_def.json' -Encoding UTF8"
+                        powershell -Command "\$json = Get-Content 'task_def.json' | ConvertFrom-Json; \$json.PSObject.Properties.Remove('taskDefinitionArn'); \$json.PSObject.Properties.Remove('revision'); \$json.PSObject.Properties.Remove('status'); \$json.PSObject.Properties.Remove('requiresAttributes'); \$json.PSObject.Properties.Remove('compatibilities'); \$json.PSObject.Properties.Remove('registeredAt'); \$json.PSObject.Properties.Remove('registeredBy'); \$envList = @(); foreach (\$env in \$json.containerDefinitions[0].environment) { if (\$env.name -ne 'EMAIL_USER' -and \$env.name -ne 'EMAIL_PASS') { \$envList += \$env; } }; \$envList += @{ name='EMAIL_USER'; value='%USR%' }; \$envList += @{ name='EMAIL_PASS'; value='%PWD%' }; \$json.containerDefinitions[0].environment = \$envList; \$json | ConvertTo-Json -Depth 15 | Out-File 'new_task_def.json' -Encoding UTF8"
                         
                         aws ecs register-task-definition ^
                             --cli-input-json file://new_task_def.json ^
                             --region %AWS_REGION% > register_output.json
-
+                        
+                        setlocal enabledelayedexpansion
+                        
                         for /f "delims=" %%B in ('powershell -Command ^
                             "(Get-Content register_output.json | ConvertFrom-Json).taskDefinition.taskDefinitionArn"') do set NEW_TASK_DEF=%%B
+
+                        echo New Task Definition: !NEW_TASK_DEF!
 
                         aws ecs update-service ^
                             --cluster %CLUSTER_NAME% ^
                             --service booking-service ^
-                            --task-definition %NEW_TASK_DEF% ^
+                            --task-definition !NEW_TASK_DEF! ^
                             --force-new-deployment ^
                             --region %AWS_REGION%
+
+                        endlocal
                     """
                 }
             }
@@ -191,20 +198,25 @@ pipeline {
         stage('9. Inject YouTube API Key into ECS CrowdPulse Service') {
             steps {
                 withCredentials([string(credentialsId: 'youtube-api-key', variable: 'YOUTUBE_API_KEY')]) {
-                    // FIX: PowerShell command is now on a single logical line
+                    // FIX: 1. PowerShell command is on one logical line. 2. PowerShell removes unnecessary JSON keys. 
+                    // FIX: 3. Added setlocal enabledelayedexpansion to correctly use the NEW_TASK_DEF variable.
                     bat '''
                         for /f "delims=" %%A in ('aws ecs describe-services --cluster %CLUSTER_NAME% --services crowdpulse-service --query "services[0].taskDefinition" --output text') do set TASK_DEF_ARN=%%A
 
                         aws ecs describe-task-definition --task-definition %TASK_DEF_ARN% --query "taskDefinition" > task_def_crowdpulse.json
 
-                        powershell -Command "$json = Get-Content 'task_def_crowdpulse.json' | ConvertFrom-Json; $envList = @(); foreach ($env in $json.containerDefinitions[0].environment) { if ($env.name -ne 'YOUTUBE_API_KEY') { $envList += $env } }; $envList += @{ name='YOUTUBE_API_KEY'; value='%YOUTUBE_API_KEY%' }; $json.containerDefinitions[0].environment = $envList; $json | ConvertTo-Json -Depth 10 | Out-File new_task_def_crowdpulse.json -Encoding utf8"
+                        powershell -Command "$json = Get-Content 'task_def_crowdpulse.json' | ConvertFrom-Json; $json.PSObject.Properties.Remove('taskDefinitionArn'); $json.PSObject.Properties.Remove('revision'); $json.PSObject.Properties.Remove('status'); $json.PSObject.Properties.Remove('requiresAttributes'); $json.PSObject.Properties.Remove('compatibilities'); $json.PSObject.Properties.Remove('registeredAt'); $json.PSObject.Properties.Remove('registeredBy'); $envList = @(); foreach ($env in $json.containerDefinitions[0].environment) { if ($env.name -ne 'YOUTUBE_API_KEY') { $envList += $env } }; $envList += @{ name='YOUTUBE_API_KEY'; value='%YOUTUBE_API_KEY%' }; $json.containerDefinitions[0].environment = $envList; $json | ConvertTo-Json -Depth 10 | Out-File new_task_def_crowdpulse.json -Encoding utf8"
 
                         aws ecs register-task-definition --cli-input-json file://new_task_def_crowdpulse.json > register_output_crowdpulse.json
 
+                        setlocal enabledelayedexpansion
+                        
                         for /f "delims=" %%B in ('powershell -Command ^
                             "(Get-Content register_output_crowdpulse.json | ConvertFrom-Json).taskDefinition.taskDefinitionArn"') do set NEW_TASK_DEF=%%B
 
-                        aws ecs update-service --cluster %CLUSTER_NAME% --service crowdpulse-service --task-definition %NEW_TASK_DEF% --force-new-deployment --region %AWS_REGION%
+                        aws ecs update-service --cluster %CLUSTER_NAME% --service crowdpulse-service --task-definition !NEW_TASK_DEF! --force-new-deployment --region %AWS_REGION%
+                        
+                        endlocal
                     '''
                 }
             }
@@ -240,7 +252,7 @@ pipeline {
         }
     }
     
-    // Conditional Cleanup Logic
+    // Conditional Cleanup Logic: Immediate destroy on failure, 15 min delay on success.
     post {
         // Runs IMMEDIATELY if the pipeline fails at any stage
         failure {
