@@ -37,6 +37,10 @@ resource "aws_ecs_task_definition" "crowdpulse_service_task" {
         {
           name  = "PORT"
           value = "5010"
+        },
+        {
+          name  = "YOUTUBE_API_KEY",
+          value = var.youtube_api_key # From variables.tf
         }
       ]
 
@@ -83,3 +87,4 @@ resource "aws_ecs_service" "crowdpulse_service" {
 
   depends_on = [aws_lb_listener.http]
 }
+

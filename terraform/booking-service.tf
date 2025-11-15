@@ -19,10 +19,26 @@ resource "aws_ecs_task_definition" "booking_service_task" {
       image     = "${aws_ecr_repository.booking_repo.repository_url}:latest" # ecr.tf se
       essential = true
       portMappings = [{ containerPort = 5000, hostPort = 5000 }]
+
+      # --- ENVIRONMENT BLOCK UPDATED ---
+      # This now includes the email variables and the correct DynamoDB table
+      # used by your Booking_Service_App.py.
       environment = [
-        { name = "BOOKINGS_TABLE_NAME", value = aws_dynamodb_table.bookings_db.name }, # <-- FIX
-        { name = "SEAT_TABLE_NAME", value = aws_dynamodb_table.seat_inventory_table.name }
+        {
+          name  = "SMART_TRIPS_TABLE",
+          value = aws_dynamodb_table.smart_trips_db.name # From dynamodb.tf
+        },
+        {
+          name  = "EMAIL_USER",
+          value = var.email_user # From variables.tf
+        },
+        {
+          name  = "EMAIL_PASS",
+          value = var.email_pass # From variables.tf
+        }
       ]
+      # --- END OF UPDATE ---
+
       logConfiguration = {
         logDriver = "awslogs",
         options = {

@@ -18,3 +18,22 @@ variable "aws_profile" {
   default     = "default"
 }
 
+# --- New Variables Added ---
+
+variable "email_user" {
+  description = "The Gmail address for sending emails (e.g., you@gmail.com)"
+  type        = string
+  default     = "dynoc845@gmail.com" # <-- IMPORTANT: Change this to your email
+}
+
+variable "email_pass" {
+  description = "The 16-character Google App Password"
+  type        = string
+  sensitive   = true # This hides the value in Terraform's output
+}
+
+variable "youtube_api_key" {
+  description = "The YouTube Data API v3 key"
+  type        = string
+  sensitive   = true
+}
