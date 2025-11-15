@@ -2,10 +2,10 @@ pipeline {
     agent any
 
     environment {
-        AWS_REGION      = 'eu-north-1'
-        ECR_REGISTRY    = '904233121598.dkr.ecr.eu-north-1.amazonaws.com'
-        CLUSTER_NAME    = 'TravelEaseCluster'
-        TERRAFORM_DIR   = 'terraform'
+        AWS_REGION    = 'eu-north-1'
+        ECR_REGISTRY  = '904233121598.dkr.ecr.eu-north-1.amazonaws.com'
+        CLUSTER_NAME  = 'TravelEaseCluster'
+        TERRAFORM_DIR = 'terraform'
     }
 
     triggers {
@@ -54,7 +54,7 @@ pipeline {
             }
         }
 
-        // 4. Fetch Terraform Outputs (Defensive check added in code)
+        // 4. Fetch Terraform Outputs
         stage('4. Fetch Terraform Outputs') {
             steps {
                 script {
@@ -62,22 +62,10 @@ pipeline {
 
                     def outputs = readJSON file: "${TERRAFORM_DIR}/tf_outputs.json"
 
-                    // Defensive Groovy helper function: prevents NullPointerException
-                    def getOutputValue = { outputsObj, key ->
-                        if (outputsObj."$key" && outputsObj."$key".value != null) {
-                            return outputsObj."$key".value
-                        } else {
-                            error "❌ CRITICAL ERROR: Terraform output key '$key' not found in tf_outputs.json. Check 'terraform/outputs.tf' or Stage 3 failure."
-                        }
-                    }
-
-                    // Assign environment variables using the safe helper
-                    def albDns = getOutputValue(outputs, 'load_balancer_dns')
-                    
-                    env.ALB_DNS      = albDns
-                    env.S3_BUCKET_NAME = getOutputValue(outputs, 'frontend_bucket_name')
-                    env.FRONTEND_URL   = "http://${albDns}"
-                    env.FRONTEND_SITE  = getOutputValue(outputs, 'frontend_website_url')
+                    env.ALB_DNS      = outputs.load_balancer_dns.value
+                    env.S3_BUCKET_NAME = outputs.frontend_bucket_name.value
+                    env.FRONTEND_URL   = "http://${outputs.load_balancer_dns.value}"
+                    env.FRONTEND_SITE  = outputs.frontend_website_url.value
 
                     echo "--------------------------------------"
                     echo " Backend ALB DNS: ${env.ALB_DNS}"
@@ -93,7 +81,6 @@ pipeline {
             steps {
                 script {
                     echo "Updating frontend URLs and deploying to S3..."
-                    // Note: update_frontend_and_deploy.py must use env.ALB_DNS, etc.
                     bat '''
                         "C:\\Users\\bruhn\\AppData\\Local\\Programs\\Python\\Python311\\python.exe" update_frontend_and_deploy.py .
                     '''
@@ -123,7 +110,7 @@ pipeline {
                                     passwordVariable: 'EMAIL_PASS'
                                 )
                             ]) {
-                                // Uses BAT interpolation for EMAIL_USER/PASS and Groovy interpolation for the rest
+                                // Double quotes """...""" needed here for ${repoName} and ${folder}
                                 bat """
                                     echo Building Booking Service with Gmail credentials...
                                     docker build --build-arg EMAIL_USER=%EMAIL_USER% --build-arg EMAIL_PASS=%EMAIL_PASS% -t %ECR_REGISTRY%/${repoName}:latest ${folder}
@@ -131,6 +118,7 @@ pipeline {
                                 """
                             }
                         } else {
+                            // Double quotes """...""" needed here for ${repoName} and ${folder}
                             bat """
                                 docker build -t %ECR_REGISTRY%/${repoName}:latest ${folder}
                                 docker push %ECR_REGISTRY%/${repoName}:latest
@@ -142,7 +130,7 @@ pipeline {
         }
 
         // 7. Force ECS Redeployment
-        stage('7. Force ECS Redeployment (Pre-Injection)') {
+        stage('7. Force ECS Redeployment') {
             steps {
                 bat '''
                     echo Redeploying ECS Services...
@@ -153,62 +141,101 @@ pipeline {
                 '''
             }
         }
-        
-        // // --- Inject Gmail Credentials (Stage 8) ---
-        stage('8. Inject Gmail Credentials (Booking Service)') {
+
+        // 8. Inject Gmail Credentials into ECS Booking Service (Uses powershell '''...''' to bypass Groovy error)
+        stage('8. Inject Gmail Credentials into ECS Booking Service') {
             steps {
                 withCredentials([
-                    usernamePassword(credentialsId: 'gmail-user', usernameVariable: 'USR', passwordVariable: 'PWD')
+                    usernamePassword(
+                        credentialsId: 'gmail-user',
+                        usernameVariable: 'USR',
+                        passwordVariable: 'PWD'
+                    )
                 ]) {
                     script {
                         def new_task_def_arn = ''
                         
-                        // Part 1: Fetch current task ARN and download JSON
+                        // Part 1: Fetch Task Definition ARN
                         bat """
-                            for /f "delims=" %%A in ('aws ecs describe-services --cluster %CLUSTER_NAME% --services booking-service --query "services[0].taskDefinition" --output text') do set TASK_DEF_ARN=%%A
-                            aws ecs describe-task-definition --task-definition %TASK_DEF_ARN% --query "taskDefinition" > task_def.json
+                            echo Fetching current task definition...
+                            
+                            for /f "delims=" %%A in ('aws ecs describe-services ^
+                                --cluster %CLUSTER_NAME% ^
+                                --services booking-service ^
+                                --query "services[0].taskDefinition" ^
+                                --output text') do set TASK_DEF_ARN=%%A
+
+                            echo Current Task Definition: %TASK_DEF_ARN%
+
+                            aws ecs describe-task-definition ^
+                                --task-definition %TASK_DEF_ARN% ^
+                                --query "taskDefinition" > task_def.json
                         """
                         
-                        // Part 2: Modify JSON (PowerShell is robustly executed here)
-                        powershell """
-                            \$td = Get-Content 'task_def.json' | ConvertFrom-Json;
+                        // Part 2: Modify JSON using the dedicated powershell step (Groovy-safe)
+                        powershell '''
+                            $td = Get-Content 'task_def.json' | ConvertFrom-Json;
                             
-                            // CRITICAL FIX: Filter out old credentials using \$\_.name
-                            \$td.containerDefinitions[0].environment = @(\$td.containerDefinitions[0].environment | Where-Object { \$\_.name -ne 'EMAIL_USER' -and \$\_.name -ne 'EMAIL_PASS' });
+                            # Filter out existing environment variables
+                            $td.containerDefinitions[0].environment = @($td.containerDefinitions[0].environment | Where-Object {$_.name -ne 'EMAIL_USER' -and $_.name -ne 'EMAIL_PASS'});
                             
-                            // Add new credentials (Jenkins variables are injected using Groovy's \${variable} syntax)
-                            \$td.containerDefinitions[0].environment += @{ name='EMAIL_USER'; value='${USR}' };
-                            \$td.containerDefinitions[0].environment += @{ name='EMAIL_PASS'; value='${PWD}' };
+                            # Inject new credentials using $env: to read variables set by withCredentials
+                            $td.containerDefinitions[0].environment += @{ name='EMAIL_USER'; value="$env:USR" };
+                            $td.containerDefinitions[0].environment += @{ name='EMAIL_PASS'; value="$env:PWD" };
                             
-                            // Reconstruct and save JSON
-                            \$new_td = @{ 
-                                containerDefinitions = \$td.containerDefinitions; family = \$td.family; networkMode = \$td.networkMode; requiresCompatibilities = \$td.requiresCompatibilities; cpu = \$td.cpu; memory = \$td.memory 
+                            # Reassemble the task definition properties
+                            $new_td = @{ 
+                                containerDefinitions = $td.containerDefinitions; 
+                                family = $td.family; 
+                                networkMode = $td.networkMode; 
+                                requiresCompatibilities = $td.requiresCompatibilities; 
+                                cpu = $td.cpu; 
+                                memory = $td.memory 
                             };
-                            if (\$td.taskRoleArn) { \$new_td.taskRoleArn = \$td.taskRoleArn };
-                            if (\$td.executionRoleArn) { \$new_td.executionRoleArn = \$td.executionRoleArn };
-                            \$new_td | ConvertTo-Json -Depth 15 | Out-File 'new_task_def.json' -Encoding UTF8
-                        """
+                            if ($td.taskRoleArn) { $new_td.taskRoleArn = $td.taskRoleArn };
+                            if ($td.executionRoleArn) { $new_td.executionRoleArn = $td.executionRoleArn };
+                            $new_td | ConvertTo-Json -Depth 15 | Out-File 'new_task_def.json' -Encoding UTF8
+                        '''
                         
-                        // Part 3: Register new Task Definition and check output
+                        // Part 3: Register new Task Definition and read ARN
                         bat """
-                            aws ecs register-task-definition --cli-input-json file://new_task_def.json --region %AWS_REGION% > register_output.json
+                            echo DEBUG: FILE CONTENT (new_task_def.json):
+                            type new_task_def.json
+                            echo --------------------------------------
+
+                            aws ecs register-task-definition ^
+                                --cli-input-json file://new_task_def.json ^
+                                --region %AWS_REGION% > register_output.json
+                            
+                            echo DEBUG: AWS ERROR OUTPUT (register_output.json):
+                            type register_output.json
+                            echo --------------------------------------
                         """
 
-                        // Part 4: Read ARN and Update Service (Groovy logic)
+                        // Part 4: Read ARN and Update Service
                         try {
-                            new_task_def_arn = powershell(script: "(Get-Content 'register_output.json' | ConvertFrom-Json).taskDefinition.taskDefinitionArn", returnStdout: true, timeout: 10).trim()
+                            new_task_def_arn = powershell(
+                                script: "(Get-Content 'register_output.json' | ConvertFrom-Json).taskDefinition.taskDefinitionArn",
+                                returnStdout: true,
+                                timeout: 10
+                            ).trim()
                         } catch (e) {
-                            echo "Warning: Could not read new Task Definition ARN. Registration likely failed."
+                            echo "Warning: Could not read new Task Definition ARN. It's likely the registration failed."
                         }
 
                         if (new_task_def_arn) {
                             echo "Successfully registered new Task Definition: ${new_task_def_arn}"
-                            // Update the service with the new ARN
+                            // Double quotes """...""" needed here for ${new_task_def_arn}
                             bat """
-                                aws ecs update-service --cluster %CLUSTER_NAME% --service booking-service --task-definition ${new_task_def_arn} --force-new-deployment --region %AWS_REGION%
+                                aws ecs update-service ^
+                                    --cluster %CLUSTER_NAME% ^
+                                    --service booking-service ^
+                                    --task-definition ${new_task_def_arn} ^
+                                    --force-new-deployment ^
+                                    --region %AWS_REGION%
                             """
                         } else {
-                            error("Failed to register new Task Definition. Check 'register_output.json' for the exact reason.")
+                            error("Failed to register new Task Definition. Check the 'DEBUG: AWS ERROR OUTPUT' for the exact reason.")
                         }
                     }
                 }
@@ -216,64 +243,81 @@ pipeline {
         }
 
 
-        // // --- Inject YouTube API Key (Stage 9) ---
-        stage('9. Inject YouTube API Key (CrowdPulse Service)') {
+        // 9. Inject YouTube API Key into ECS CrowdPulse Service (Uses powershell '''...''' to bypass Groovy error)
+        stage('9. Inject YouTube API Key into ECS CrowdPulse Service') {
             steps {
                 withCredentials([string(credentialsId: 'youtube-api-key', variable: 'YOUTUBE_API_KEY')]) {
                     script {
                         def new_task_def_arn = ''
                         
-                        // Part 1: Fetch current task ARN and download JSON
+                        // Part 1: Fetch Task Definition ARN 
                         bat '''
                             for /f "delims=" %%A in ('aws ecs describe-services --cluster %CLUSTER_NAME% --services crowdpulse-service --query "services[0].taskDefinition" --output text') do set TASK_DEF_ARN=%%A
+
                             aws ecs describe-task-definition --task-definition %TASK_DEF_ARN% --query "taskDefinition" > task_def_crowdpulse.json
                         '''
                         
-                        // Part 2: Modify JSON (PowerShell is robustly executed here)
-                        powershell """
-                            \$td = Get-Content 'task_def_crowdpulse.json' | ConvertFrom-Json;
+                        // Part 2: Modify JSON using the dedicated powershell step (Groovy-safe)
+                        powershell '''
+                            $td = Get-Content 'task_def_crowdpulse.json' | ConvertFrom-Json;
                             
-                            // FIX: Filter out old API key using the correct PowerShell pipeline variable \$\_.name
-                            \$td.containerDefinitions[0].environment = @(\$td.containerDefinitions[0].environment | Where-Object { \$\_.name -ne 'YOUTUBE_API_KEY' });
+                            # Filter out existing environment variables
+                            $td.containerDefinitions[0].environment = @($td.containerDefinitions[0].environment | Where-Object {$_.name -ne 'YOUTUBE_API_KEY'});
                             
-                            // Add new credential using Groovy interpolation
-                            \$td.containerDefinitions[0].environment += @{ name='YOUTUBE_API_KEY'; value='${YOUTUBE_API_KEY}' };
+                            # Inject new credentials using $env: to read variables set by withCredentials
+                            $td.containerDefinitions[0].environment += @{ name='YOUTUBE_API_KEY'; value="$env:YOUTUBE_API_KEY" };
                             
-                            // Reconstruct and save JSON
-                            \$new_td = @{ 
-                                containerDefinitions = \$td.containerDefinitions; family = \$td.family; networkMode = \$td.networkMode; requiresCompatibilities = \$td.requiresCompatibilities; cpu = \$td.cpu; memory = \$td.memory 
+                            # Reassemble the task definition properties
+                            $new_td = @{ 
+                                containerDefinitions = $td.containerDefinitions; 
+                                family = $td.family; 
+                                networkMode = $td.networkMode; 
+                                requiresCompatibilities = $td.requiresCompatibilities; 
+                                cpu = $td.cpu; 
+                                memory = $td.memory 
                             };
-                            if (\$td.taskRoleArn) { \$new_td.taskRoleArn = \$td.taskRoleArn };
-                            if (\$td.executionRoleArn) { \$new_td.executionRoleArn = \$td.executionRoleArn };
-                            \$new_td | ConvertTo-Json -Depth 10 | Out-File 'new_task_def_crowdpulse.json' -Encoding UTF8
+                            if ($td.taskRoleArn) { $new_td.taskRoleArn = $td.taskRoleArn };
+                            if ($td.executionRoleArn) { $new_td.executionRoleArn = $td.executionRoleArn };
+                            $new_td | ConvertTo-Json -Depth 10 | Out-File 'new_task_def_crowdpulse.json' -Encoding UTF8
+                        '''
+                        
+                        // Part 3: Register new Task Definition and read ARN 
+                        bat """
+                            echo DEBUG: FILE CONTENT (new_task_def_crowdpulse.json):
+                            type new_task_def_crowdpulse.json
+                            echo --------------------------------------
+
+                            aws ecs register-task-definition --cli-input-json file://new_task_def_crowdpulse.json > register_output_crowdpulse.json
+
+                            echo DEBUG: AWS ERROR OUTPUT (register_output_crowdpulse.json):
+                            type register_output_crowdpulse.json
+                            echo --------------------------------------
                         """
                         
-                        // Part 3: Register new Task Definition and check output
-                        bat """
-                            aws ecs register-task-definition --cli-input-json file://new_task_def_crowdpulse.json --region %AWS_REGION% > register_output_crowdpulse.json
-                        """
-
-                        // Part 4: Read ARN and Update Service (Groovy logic)
+                        // Part 4: Read ARN and Update Service
                         try {
-                            new_task_def_arn = powershell(script: "(Get-Content 'register_output_crowdpulse.json' | ConvertFrom-Json).taskDefinition.taskDefinitionArn", returnStdout: true, timeout: 10).trim()
+                             new_task_def_arn = powershell(
+                                script: "(Get-Content 'register_output_crowdpulse.json' | ConvertFrom-Json).taskDefinition.taskDefinitionArn",
+                                returnStdout: true,
+                                timeout: 10
+                            ).trim()
                         } catch (e) {
-                            echo "Warning: Could not read new Task Definition ARN for CrowdPulse. Registration likely failed."
+                            echo "Warning: Could not read new Task Definition ARN. It's likely the registration failed."
                         }
-
+                        
                         if (new_task_def_arn) {
-                            echo "Successfully registered new CrowdPulse Task Definition: ${new_task_def_arn}"
-                            // Update the service with the new ARN
+                            echo "Successfully registered new Task Definition: ${new_task_def_arn}"
+                            // Double quotes """...""" needed here for ${new_task_def_arn}
                             bat """
                                 aws ecs update-service --cluster %CLUSTER_NAME% --service crowdpulse-service --task-definition ${new_task_def_arn} --force-new-deployment --region %AWS_REGION%
                             """
                         } else {
-                            error("Failed to register new CrowdPulse Task Definition. Check 'register_output_crowdpulse.json' for the exact reason.")
+                            error("Failed to register new Task Definition. Check the 'DEBUG: AWS ERROR OUTPUT' for the exact reason.")
                         }
                     }
                 }
             }
         }
-
 
         // 10. Verify Frontend Upload
         stage('10. Verify Frontend Upload') {
@@ -311,7 +355,7 @@ pipeline {
         failure {
             echo '🚨 Deployment failed. Starting IMMEDIATE infrastructure teardown (terraform destroy).'
             dir("${TERRAFORM_DIR}") {
-                bat 'terraform destroy -auto-approve || true' // Added || true for resilience
+                bat 'terraform destroy -auto-approve'
             }
         }
         
@@ -320,9 +364,7 @@ pipeline {
             echo '✅ Deployment completed successfully. Waiting 15 minutes before starting infrastructure teardown.'
             
             // Wait for 15 minutes (900 seconds)
-            script {
-                sleep(time: 15, unit: 'MINUTES')
-            }
+            sleep(time: 15, unit: 'MINUTES')
             
             echo '⏳ 15 minutes elapsed. Starting infrastructure teardown (terraform destroy).'
             dir("${TERRAFORM_DIR}") {
