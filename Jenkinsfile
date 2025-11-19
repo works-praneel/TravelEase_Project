@@ -143,10 +143,9 @@ pipeline {
             }
         }
 
-        // STAGE 8 HAS BEEN DELETED
-        // STAGE 9 HAS BEEN DELETED
+        
 
-        // 10. Verify Frontend Upload (Renumbered from 10)
+        // 8. Verify Frontend Upload (Renumbered from 10)
         stage('8. Verify Frontend Upload') {
             steps {
                 bat '''
@@ -159,7 +158,7 @@ pipeline {
             }
         }
 
-        // 11. Deployment Summary (Renumbered from 11)
+        // 9. Deployment Summary (Renumbered from 11)
         stage('9. Deployment Summary') {
             steps {
                 echo "--------------------------------------"
@@ -168,7 +167,7 @@ pipeline {
             }
         }
 
-        // 12. Show Deployed Website URL (Renumbered from 12)
+        // 10. Show Deployed Website URL (Renumbered from 12)
         stage('10. Show Deployed Website URL') {
             steps {
                 echo "Deployed TravelEase Website: ${env.FRONTEND_SITE}"
