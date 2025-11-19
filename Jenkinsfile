@@ -41,7 +41,7 @@ pipeline {
             }
         }
 
-        // 3. Apply Infrastructure (Terraform) - NOW WITH SECRETS
+        // 3. Apply Infrastructure (Terraform) - WITH SECRETS
         stage('3. Apply Infrastructure (Terraform)') {
             steps {
                 // Fetch ALL secrets needed by Terraform
@@ -105,7 +105,7 @@ pipeline {
             }
         }
 
-        // 6. Build & Push Docker Images (NOW SECURE & SIMPLIFIED)
+        // 6. Build & Push Docker Images
         stage('6. Build & Push Docker Images') {
             steps {
                 script {
@@ -116,11 +116,9 @@ pipeline {
                         'crowdpulse-service': 'CrowdPulse\\backend'
                     ]
 
-                    // This loop is now simple. No credentials needed here.
                     services.each { repoName, folder ->
                         echo "Building and pushing image for ${repoName}..."
                         
-                        // Double quotes """...""" needed here for ${repoName} and ${folder}
                         bat """
                             docker build -t %ECR_REGISTRY%/${repoName}:latest ${folder}
                             docker push %ECR_REGISTRY%/${repoName}:latest
@@ -143,9 +141,7 @@ pipeline {
             }
         }
 
-        
-
-        // 8. Verify Frontend Upload (Renumbered from 10)
+        // 8. Verify Frontend Upload
         stage('8. Verify Frontend Upload') {
             steps {
                 bat '''
@@ -158,7 +154,7 @@ pipeline {
             }
         }
 
-        // 9. Deployment Summary (Renumbered from 11)
+        // 9. Deployment Summary
         stage('9. Deployment Summary') {
             steps {
                 echo "--------------------------------------"
@@ -167,7 +163,7 @@ pipeline {
             }
         }
 
-        // 10. Show Deployed Website URL (Renumbered from 12)
+        // 10. Show Deployed Website URL
         stage('10. Show Deployed Website URL') {
             steps {
                 echo "Deployed TravelEase Website: ${env.FRONTEND_SITE}"
@@ -175,12 +171,24 @@ pipeline {
         }
     }
     
-    // Post-build cleanup logic remains the same
+    // Post-build cleanup logic (UPDATED TO FIX 'NO VALUE FOR VARIABLE' ERROR)
     post {
         failure {
-            echo '🚨 Deployment failed. Starting IMMEDIATE infrastructure teardown (terraform destroy).'
-            dir("${TERRAFORM_DIR}") {
-                bat 'terraform destroy -auto-approve'
+            echo '🚨 Deployment failed. Starting IMMEDIATE infrastructure teardown...'
+            withCredentials([
+                usernamePassword(credentialsId: 'gmail-user', usernameVariable: 'GMAIL_USER', passwordVariable: 'GMAIL_PASS'),
+                string(credentialsId: 'youtube-api-key', variable: 'YOUTUBE_KEY')
+            ]) {
+                dir("${TERRAFORM_DIR}") {
+                    bat '''
+                        echo Setting variables for destroy...
+                        set TF_VAR_email_user=%GMAIL_USER%
+                        set TF_VAR_email_pass=%GMAIL_PASS%
+                        set TF_VAR_youtube_api_key=%YOUTUBE_KEY%
+                        
+                        terraform destroy -auto-approve -input=false
+                    '''
+                }
             }
         }
         
@@ -189,9 +197,22 @@ pipeline {
             
             sleep(time: 15, unit: 'MINUTES')
             
-            echo '⏳ 15 minutes elapsed. Starting infrastructure teardown (terraform destroy).'
-            dir("${TERRAFORM_DIR}") {
-                bat 'terraform destroy -auto-approve'
+            echo '⏳ 15 minutes elapsed. Starting infrastructure teardown...'
+            
+            withCredentials([
+                usernamePassword(credentialsId: 'gmail-user', usernameVariable: 'GMAIL_USER', passwordVariable: 'GMAIL_PASS'),
+                string(credentialsId: 'youtube-api-key', variable: 'YOUTUBE_KEY')
+            ]) {
+                dir("${TERRAFORM_DIR}") {
+                    bat '''
+                        echo Setting variables for destroy...
+                        set TF_VAR_email_user=%GMAIL_USER%
+                        set TF_VAR_email_pass=%GMAIL_PASS%
+                        set TF_VAR_youtube_api_key=%YOUTUBE_KEY%
+                        
+                        terraform destroy -auto-approve -input=false
+                    '''
+                }
             }
         }
     }
