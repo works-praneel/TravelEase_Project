@@ -171,49 +171,57 @@ pipeline {
         }
     }
     
-    // Post-build cleanup logic (UPDATED TO FIX 'NO VALUE FOR VARIABLE' ERROR)
+// Conditional Cleanup Logic: Immediate destroy on failure, 15 min delay on success.
     post {
+        
+        // Runs IMMEDIATELY if the pipeline fails at any stage
         failure {
-            echo '🚨 Deployment failed. Starting IMMEDIATE infrastructure teardown...'
-            withCredentials([
-                usernamePassword(credentialsId: 'gmail-user', usernameVariable: 'GMAIL_USER', passwordVariable: 'GMAIL_PASS'),
-                string(credentialsId: 'youtube-api-key', variable: 'YOUTUBE_KEY')
-            ]) {
-                dir("${TERRAFORM_DIR}") {
-                    bat '''
-                        echo Setting variables for destroy...
-                        set TF_VAR_email_user=%GMAIL_USER%
-                        set TF_VAR_email_pass=%GMAIL_PASS%
-                        set TF_VAR_youtube_api_key=%YOUTUBE_KEY%
-                        
-                        terraform destroy -auto-approve -input=false
-                    '''
+            echo '🚨 Deployment failed. Starting IMMEDIATE infrastructure teardown (terraform destroy).'
+            script {
+                withCredentials([
+                    usernamePassword(credentialsId: 'gmail-user', usernameVariable: 'USR', passwordVariable: 'PWD'),
+                    string(credentialsId: 'youtube-api-key', variable: 'YOUTUBE_API_KEY')
+                ]) {
+                    dir("${TERRAFORM_DIR}") {
+                        // Pass the required variables using -var flags
+                        bat """
+                            echo Starting terraform destroy in failure block...
+                            terraform destroy -auto-approve ^
+                                -var "email_user=${env.USR}" ^
+                                -var "email_pass=${env.PWD}" ^
+                                -var "youtube_api_key=${env.YOUTUBE_API_KEY}" || true
+                        """
+                    }
                 }
             }
         }
         
+        // Runs only if the pipeline completes all stages successfully
         success {
             echo '✅ Deployment completed successfully. Waiting 15 minutes before starting infrastructure teardown.'
             
-            sleep(time: 15, unit: 'MINUTES')
+            script {
+                // Wait for 15 minutes (900 seconds)
+                sleep(time: 15, unit: 'MINUTES')
             
-            echo '⏳ 15 minutes elapsed. Starting infrastructure teardown...'
-            
-            withCredentials([
-                usernamePassword(credentialsId: 'gmail-user', usernameVariable: 'GMAIL_USER', passwordVariable: 'GMAIL_PASS'),
-                string(credentialsId: 'youtube-api-key', variable: 'YOUTUBE_KEY')
-            ]) {
-                dir("${TERRAFORM_DIR}") {
-                    bat '''
-                        echo Setting variables for destroy...
-                        set TF_VAR_email_user=%GMAIL_USER%
-                        set TF_VAR_email_pass=%GMAIL_PASS%
-                        set TF_VAR_youtube_api_key=%YOUTUBE_KEY%
-                        
-                        terraform destroy -auto-approve -input=false
-                    '''
+                echo '⏳ 15 minutes elapsed. Starting infrastructure teardown (terraform destroy).'
+                withCredentials([
+                    usernamePassword(credentialsId: 'gmail-user', usernameVariable: 'USR', passwordVariable: 'PWD'),
+                    string(credentialsId: 'youtube-api-key', variable: 'YOUTUBE_API_KEY')
+                ]) {
+                    dir("${TERRAFORM_DIR}") {
+                        // Pass the required variables using -var flags
+                        bat """
+                            echo Starting terraform destroy in success block...
+                            terraform destroy -auto-approve ^
+                                -var "email_user=${env.USR}" ^
+                                -var "email_pass=${env.PWD}" ^
+                                -var "youtube_api_key=${env.YOUTUBE_API_KEY}"
+                        """
+                    }
                 }
             }
         }
     }
+}
 }
