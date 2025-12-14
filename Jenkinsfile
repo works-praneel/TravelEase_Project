@@ -1,6 +1,10 @@
 pipeline {
     agent any
 
+    options {
+        disableConcurrentBuilds()
+    }
+
     environment {
         AWS_REGION    = 'eu-north-1'
         ECR_REGISTRY  = '904233121598.dkr.ecr.eu-north-1.amazonaws.com'
@@ -64,15 +68,12 @@ pipeline {
                 ]) {
                     dir("${TERRAFORM_DIR}") {
                         bat '''
-                            echo Setting Terraform variables...
-
                             set TF_VAR_email_user=%GMAIL_USER%
                             set TF_VAR_email_pass=%GMAIL_PASS%
                             set TF_VAR_youtube_api_key=%YOUTUBE_KEY%
 
                             terraform init -input=false
                             terraform apply -auto-approve -input=false
-
                             terraform output -json > tf_outputs.json
                         '''
                     }
@@ -88,31 +89,28 @@ pipeline {
                 dir("${TERRAFORM_DIR}") {
                     script {
                         if (!fileExists('tf_outputs.json')) {
-                            error "tf_outputs.json not found. Terraform apply did not complete."
+                            error "tf_outputs.json not found."
                         }
 
                         def outputs = readJSON file: 'tf_outputs.json'
 
                         if (!outputs?.load_balancer_dns?.value) {
-                            error "Terraform output 'load_balancer_dns' is missing or null."
+                            error "Terraform output 'load_balancer_dns' missing."
                         }
 
                         env.ALB_DNS        = outputs.load_balancer_dns.value
                         env.S3_BUCKET_NAME = outputs.frontend_bucket_name?.value
                         env.FRONTEND_SITE  = outputs.frontend_website_url?.value
 
-                        echo "--------------------------------------"
-                        echo " ALB DNS        : ${env.ALB_DNS}"
-                        echo " S3 Bucket      : ${env.S3_BUCKET_NAME}"
-                        echo " Frontend Site  : ${env.FRONTEND_SITE}"
-                        echo "--------------------------------------"
+                        echo "ALB DNS       : ${env.ALB_DNS}"
+                        echo "Frontend URL : ${env.FRONTEND_SITE}"
                     }
                 }
             }
         }
 
         // --------------------------------------------------
-        // 5. Update Frontend & Deploy to S3
+        // 5. Update Frontend & Deploy
         // --------------------------------------------------
         stage('5. Update Frontend URL and Deploy') {
             steps {
@@ -137,7 +135,6 @@ pipeline {
                     ]
 
                     services.each { repo, folder ->
-                        echo "Building and pushing ${repo}"
                         bat """
                             docker build -t %ECR_REGISTRY%/${repo}:latest ${folder}
                             docker push %ECR_REGISTRY%/${repo}:latest
@@ -153,8 +150,6 @@ pipeline {
         stage('7. Force ECS Redeployment') {
             steps {
                 bat '''
-                    echo Redeploying ECS services...
-
                     aws ecs update-service --cluster %CLUSTER_NAME% --service booking-service    --force-new-deployment --region %AWS_REGION%
                     aws ecs update-service --cluster %CLUSTER_NAME% --service flight-service     --force-new-deployment --region %AWS_REGION%
                     aws ecs update-service --cluster %CLUSTER_NAME% --service payment-service    --force-new-deployment --region %AWS_REGION%
@@ -170,9 +165,6 @@ pipeline {
             steps {
                 bat '''
                     aws s3 ls s3://%S3_BUCKET_NAME%/
-                    aws s3 cp CrowdPulse\\frontend\\crowdpulse_widget.html ^
-                    s3://%S3_BUCKET_NAME%/CrowdPulse/frontend/crowdpulse_widget.html ^
-                    --content-type text/html
                 '''
             }
         }
@@ -182,23 +174,67 @@ pipeline {
         // --------------------------------------------------
         stage('9. Deployment Summary') {
             steps {
-                echo "--------------------------------------"
-                echo " TravelEase Deployment Complete!"
-                echo " Website: ${env.FRONTEND_SITE}"
-                echo "--------------------------------------"
+                echo "Deployment complete."
+                echo "Website: ${env.FRONTEND_SITE}"
             }
         }
     }
 
     // --------------------------------------------------
-    // Post Actions (NO DESTROY)
+    // POST ACTIONS (AUTO DESTROY)
     // --------------------------------------------------
     post {
+
         failure {
-            echo 'Deployment failed. Infrastructure retained for debugging.'
+            echo 'Deployment failed. Destroying infrastructure immediately.'
+
+            withCredentials([
+                usernamePassword(
+                    credentialsId: 'gmail-user',
+                    usernameVariable: 'USR',
+                    passwordVariable: 'PWD'
+                ),
+                string(
+                    credentialsId: 'youtube-api-key',
+                    variable: 'YOUTUBE_API_KEY'
+                )
+            ]) {
+                dir("${TERRAFORM_DIR}") {
+                    bat '''
+                        terraform destroy -auto-approve ^
+                        -var "email_user=%USR%" ^
+                        -var "email_pass=%PWD%" ^
+                        -var "youtube_api_key=%YOUTUBE_API_KEY%"
+                    '''
+                }
+            }
         }
+
         success {
-            echo 'Deployment successful. Infrastructure retained.'
+            echo 'Deployment successful. Waiting 15 minutes before destroy.'
+
+            sleep(time: 15, unit: 'MINUTES')
+
+            withCredentials([
+                usernamePassword(
+                    credentialsId: 'gmail-user',
+                    usernameVariable: 'USR',
+                    passwordVariable: 'PWD'
+                ),
+                string(
+                    credentialsId: 'youtube-api-key',
+                    variable: 'YOUTUBE_API_KEY'
+                )
+            ]) {
+                dir("${TERRAFORM_DIR}") {
+                    bat '''
+                        terraform destroy -auto-approve ^
+                        -var "email_user=%/jobs%" ^
+                        -var "email_pass=%PWD%" ^
+                        -var "youtube_api_key=%YOUTUBE_API_KEY%"
+                    '''
+                }
+            }
         }
     }
 }
