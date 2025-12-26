@@ -18,18 +18,12 @@ pipeline {
 
     stages {
 
-        // --------------------------------------------------
-        // 1. Checkout Code
-        // --------------------------------------------------
         stage('1. Checkout SCM') {
             steps {
                 checkout scm
             }
         }
 
-        // --------------------------------------------------
-        // 2. AWS & ECR Login
-        // --------------------------------------------------
         stage('2. Login to AWS & ECR') {
             steps {
                 withCredentials([
@@ -50,21 +44,11 @@ pipeline {
             }
         }
 
-        // --------------------------------------------------
-        // 3. Apply Infrastructure (Terraform)
-        // --------------------------------------------------
         stage('3. Apply Infrastructure (Terraform)') {
             steps {
                 withCredentials([
-                    usernamePassword(
-                        credentialsId: 'gmail-user',
-                        usernameVariable: 'GMAIL_USER',
-                        passwordVariable: 'GMAIL_PASS'
-                    ),
-                    string(
-                        credentialsId: 'youtube-api-key',
-                        variable: 'YOUTUBE_KEY'
-                    )
+                    usernamePassword(credentialsId: 'gmail-user', usernameVariable: 'GMAIL_USER', passwordVariable: 'GMAIL_PASS'),
+                    string(credentialsId: 'youtube-api-key', variable: 'YOUTUBE_KEY')
                 ]) {
                     dir("${TERRAFORM_DIR}") {
                         bat '''
@@ -81,38 +65,20 @@ pipeline {
             }
         }
 
-        // --------------------------------------------------
-        // 4. Fetch Terraform Outputs (SAFE)
-        // --------------------------------------------------
         stage('4. Fetch Terraform Outputs') {
             steps {
                 dir("${TERRAFORM_DIR}") {
                     script {
-                        if (!fileExists('tf_outputs.json')) {
-                            error "tf_outputs.json not found."
-                        }
-
                         def outputs = readJSON file: 'tf_outputs.json'
-
-                        if (!outputs?.load_balancer_dns?.value) {
-                            error "Terraform output 'load_balancer_dns' missing."
-                        }
-
-                        env.ALB_DNS        = outputs.load_balancer_dns.value
-                        env.S3_BUCKET_NAME = outputs.frontend_bucket_name?.value
-                        env.FRONTEND_SITE  = outputs.frontend_website_url?.value
-
-                        echo "ALB DNS       : ${env.ALB_DNS}"
-                        echo "Frontend URL : ${env.FRONTEND_SITE}"
+                        env.ALB_DNS = outputs.load_balancer_dns.value
+                        env.FRONTEND_SITE = outputs.frontend_website_url.value
+                        echo "ALB DNS: ${env.ALB_DNS}"
                     }
                 }
             }
         }
 
-        // --------------------------------------------------
-        // 5. Update Frontend & Deploy
-        // --------------------------------------------------
-        stage('5. Update Frontend URL and Deploy') {
+        stage('5. Update Frontend & Deploy') {
             steps {
                 bat '''
                     "C:\\Users\\bruhn\\AppData\\Local\\Programs\\Python\\Python311\\python.exe" ^
@@ -121,9 +87,6 @@ pipeline {
             }
         }
 
-        // --------------------------------------------------
-        // 6. Build & Push Docker Images
-        // --------------------------------------------------
         stage('6. Build & Push Docker Images') {
             steps {
                 script {
@@ -144,9 +107,6 @@ pipeline {
             }
         }
 
-        // --------------------------------------------------
-        // 7. Force ECS Redeployment
-        // --------------------------------------------------
         stage('7. Force ECS Redeployment') {
             steps {
                 bat '''
@@ -158,78 +118,55 @@ pipeline {
             }
         }
 
-        // --------------------------------------------------
-        // 8. Verify Frontend Upload
-        // --------------------------------------------------
-        stage('8. Verify Frontend Upload') {
+        // 🔥 LOAD TESTING STAGE
+        stage('8. Load Testing (Traffic Simulation)') {
             steps {
-                bat '''
-                    aws s3 ls s3://%S3_BUCKET_NAME%/
-                '''
-            }
-        }
+                script {
+                    echo "Starting heavy traffic simulation..."
 
-        // --------------------------------------------------
-        // 9. Deployment Summary
-        // --------------------------------------------------
-        stage('9. Deployment Summary') {
-            steps {
-                echo "Deployment complete."
-                echo "Website: ${env.FRONTEND_SITE}"
-            }
-        }
-    }
-
-    // --------------------------------------------------
-    // POST ACTIONS (AUTO DESTROY)
-    // --------------------------------------------------
-    post {
-
-        failure {
-            echo 'Deployment failed. Destroying infrastructure immediately.'
-
-            withCredentials([
-                usernamePassword(
-                    credentialsId: 'gmail-user',
-                    usernameVariable: 'USR',
-                    passwordVariable: 'PWD'
-                ),
-                string(
-                    credentialsId: 'youtube-api-key',
-                    variable: 'YOUTUBE_API_KEY'
-                )
-            ]) {
-                dir("${TERRAFORM_DIR}") {
                     bat '''
-                        terraform destroy -auto-approve ^
-                        -var "email_user=%USR%" ^
-                        -var "email_pass=%PWD%" ^
-                        -var "youtube_api_key=%YOUTUBE_API_KEY%"
+                        echo Simulating traffic on Booking Service...
+                        for /L %%i in (1,1,300) do (
+                          curl -s http://%ALB_DNS%/ping > NUL
+                        )
+
+                        echo Simulating traffic on Flight Service...
+                        for /L %%i in (1,1,300) do (
+                          curl -s http://%ALB_DNS%/api/flights > NUL
+                        )
+
+                        echo Simulating traffic on Payment Service...
+                        for /L %%i in (1,1,300) do (
+                          curl -s http://%ALB_DNS%/api/payment > NUL
+                        )
+
+                        echo Load testing complete. Check CloudWatch metrics.
                     '''
                 }
             }
         }
 
-        success {
-            echo 'Deployment successful. Waiting 15 minutes before destroy.'
+        stage('9. Deployment Summary') {
+            steps {
+                echo "Deployment & Load Testing Complete"
+                echo "Website: ${env.FRONTEND_SITE}"
+            }
+        }
+    }
 
+    post {
+        success {
+            echo 'Deployment successful. Waiting 15 minutes before auto destroy.'
             sleep(time: 15, unit: 'MINUTES')
 
             withCredentials([
-                usernamePassword(
-                    credentialsId: 'gmail-user',
-                    usernameVariable: 'USR',
-                    passwordVariable: 'PWD'
-                ),
-                string(
-                    credentialsId: 'youtube-api-key',
-                    variable: 'YOUTUBE_API_KEY'
-                )
+                usernamePassword(credentialsId: 'gmail-user', usernameVariable: 'USR', passwordVariable: 'PWD'),
+                string(credentialsId: 'youtube-api-key', variable: 'YOUTUBE_API_KEY')
             ]) {
                 dir("${TERRAFORM_DIR}") {
                     bat '''
                         terraform destroy -auto-approve ^
-                        -var "email_user=%/jobs%" ^
+                        -var "email_user=%USR%" ^
                         -var "email_pass=%PWD%" ^
                         -var "youtube_api_key=%YOUTUBE_API_KEY%"
                     '''
